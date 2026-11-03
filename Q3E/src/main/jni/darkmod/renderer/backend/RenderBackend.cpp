@@ -22,6 +22,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #include "renderer/backend/GLSLProgram.h"
 #include "renderer/backend/FrameBufferManager.h"
 #include "renderer/backend/FrameBuffer.h"
+#include "renderer/vr/OpenXRBackend.h"
 
 RenderBackend renderBackendImpl;
 RenderBackend *renderBackend = &renderBackendImpl;
@@ -62,11 +63,15 @@ void RenderBackend::Init() {
 		qglBufferData( GL_PIXEL_PACK_BUFFER, DARKMOD_LG_RENDER_WIDTH * DARKMOD_LG_RENDER_WIDTH * DARKMOD_LG_BPP, nullptr, GL_STREAM_READ );
 	}
 	qglBindBuffer( GL_PIXEL_PACK_BUFFER, 0 ); // reset to default to allow sysmem ReadPixels if LG disabled
+
+	// VR: creates the OpenXR session if the application was started as a VR app (does nothing otherwise)
+	vrBackend->Init();
 }
 
 void RenderBackend::Shutdown() {
 	if (!initialized)
 		return;
+	vrBackend->Destroy();
 	qglDeleteBuffers( 3, lightgemPbos );
 	
 	tonemapStage.Shutdown();

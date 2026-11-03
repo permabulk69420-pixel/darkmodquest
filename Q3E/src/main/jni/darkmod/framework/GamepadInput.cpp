@@ -225,6 +225,17 @@ void idGamepadInput::UnbindAll() {
 	wasModifiedAfterLastWrite = true;
 }
 
+bool idGamepadInput::HasAnyBinding() {
+	for ( int i = 0; i < PAD_NUM_BUTTONS; ++i ) {
+		for ( int j = 0; j < BIND_NUM; ++j ) {
+			if ( buttonState[i].bindings[j].action != -1 ) {
+				return true;
+			}
+		}
+	}
+	return modifierButton != -1;
+}
+
 void idGamepadInput::SetBinding( int button, int type, const idStr &binding ) {
 	if ( button < 0 || button >= PAD_NUM_BUTTONS || type < 0 || (type >= BIND_NUM && type != BIND_MODIFIER) ) {
 		common->Printf("Invalid gamepad button binding\n");

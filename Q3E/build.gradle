@@ -123,4 +123,6 @@ dependencies {
     //implementation 'com.arthenica:mobile-ffmpeg-full:4.4.LTS'
     //implementation 'com.arthenica:mobile-ffmpeg-video:4.4.LTS'
     implementation 'io.github.hexhacking:xunwind:2.0.0'
+    // OpenXR loader, used by the VR mode of The Dark Mod on Meta Quest (prefab package, see darkmod/CMakeLists.txt)
+    implementation 'org.khronos.openxr:openxr_loader_for_android:1.0.34'
 }

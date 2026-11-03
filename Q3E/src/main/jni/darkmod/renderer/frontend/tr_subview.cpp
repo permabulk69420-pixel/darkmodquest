@@ -34,17 +34,14 @@ idCVar r_remoteLimitResolutionByScreenSize(
 );
 
 
-typedef struct {
-	idVec3		origin;
-	idMat3		axis;
-} orientation_t;
+// note: orientation_t is declared in RenderWorld.h (VR needs to store it in renderView_t)
 
 /*
 =================
 R_MirrorPoint
 =================
 */
-static void R_MirrorPoint( const idVec3 in, orientation_t *surface, orientation_t *camera, idVec3 &out ) {
+void R_MirrorPoint( const idVec3 in, orientation_t *surface, orientation_t *camera, idVec3 &out ) {
 	int		i;
 	idVec3	local;
 	idVec3	transformed;
@@ -66,7 +63,7 @@ static void R_MirrorPoint( const idVec3 in, orientation_t *surface, orientation_
 R_MirrorVector
 =================
 */
-static void R_MirrorVector( const idVec3 in, orientation_t *surface, orientation_t *camera, idVec3 &out ) {
+void R_MirrorVector( const idVec3 in, orientation_t *surface, orientation_t *camera, idVec3 &out ) {
 	int		i;
 	float	d;
 
@@ -287,6 +284,15 @@ static viewDef_t *R_MirrorViewBySurface( drawSurf_t *drawSurf ) {
 	R_MirrorVector( tr.viewDef->renderView.viewaxis[0], &surface, &camera, parms->renderView.viewaxis[0] );
 	R_MirrorVector( tr.viewDef->renderView.viewaxis[1], &surface, &camera, parms->renderView.viewaxis[1] );
 	R_MirrorVector( tr.viewDef->renderView.viewaxis[2], &surface, &camera, parms->renderView.viewaxis[2] );
+
+	if ( tr.viewDef->renderView.followsHead ) {
+		// VR: remember how this view was derived, so the backend can re-pose it for each eye
+		parms->renderView.isMirror = true;
+		parms->renderView.mirrorSurface = surface;
+		parms->renderView.mirrorCamera = camera;
+		R_MirrorPoint( tr.viewDef->renderView.eyeorg[0], &surface, &camera, parms->renderView.eyeorg[0] );
+		R_MirrorPoint( tr.viewDef->renderView.eyeorg[1], &surface, &camera, parms->renderView.eyeorg[1] );
+	}
 
 	// make the view origin 16 units away from the center of the surface
 	idVec3	viewOrigin = (drawSurf->frontendGeo->bounds[0] + drawSurf->frontendGeo->bounds[1]) * 0.5;
@@ -553,6 +559,16 @@ void R_PortalRender() {
 
 		parms->renderView.vieworg = PSOrigin;	// grayman #3108 - contributed by neuro & 7318
 		parms->renderView.viewaxis = tr.viewDef->renderView.viewaxis * gameLocal.portalSkyEnt.GetEntity()->GetPhysics()->GetAxis();
+
+		if ( tr.viewDef->renderView.followsHead && !tr.viewDef->renderView.isMirror ) {
+			// VR: the sky only follows the rotation of the head, never its position
+			parms->renderView.initialVieworg = PSOrigin;
+			parms->renderView.initialViewaxis = tr.viewDef->renderView.initialViewaxis * gameLocal.portalSkyEnt.GetEntity()->GetPhysics()->GetAxis();
+			parms->renderView.fixedOrigin = true;
+			parms->renderView.eyeorg[0] = parms->renderView.eyeorg[1] = PSOrigin;
+		} else {
+			parms->renderView.followsHead = false;
+		}
 
 		// set up viewport, adjusted for resolution and OpenGL style 0 at the bottom
 		tr.RenderViewToViewport( parms->renderView, parms->viewport );

@@ -19,6 +19,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #include "renderer/backend/FrameBuffer.h"
 #include "renderer/backend/RenderBackend.h"
 #include "renderer/backend/FrameBufferManager.h"
+#include "renderer/vr/OpenXRBackend.h"
 
 idRenderSystemLocal	tr;
 idRenderSystem	*renderSystem = &tr;
@@ -166,6 +167,13 @@ void R_IssueRenderCommands( frameData_t *frameData, bool swapBuffers ) {
 	// r_skipRender is usually more usefull, because it will still
 	// draw 2D graphics
 	if ( !r_skipBackEnd.GetBool() ) {
+		if ( swapBuffers && vrBackend->IsActive() ) {
+			// VR: draws both eyes and the UI overlay and hands the frame to the headset's compositor.
+			// There is no window to swap.
+			vrBackend->RenderStereoView( frameData );
+			R_ClearCommandChain( frameData );
+			return;
+		}
 		RB_ExecuteBackEndCommands( cmds );
 	}
 	R_ClearCommandChain( frameData );
@@ -761,6 +769,8 @@ void idRenderSystemLocal::EndFrame( int *frontEndMsec, int *backEndMsec ) {
 #endif
 		RB_CopyDebugPrimitivesToBackend();
 		common->SetErrorIndirection( true );
+		// VR: handle headset events and predict the head pose for the frame the frontend is about to prepare
+		vrBackend->PrepareFrame();
 		session->ActivateFrontend();
 		frameBuffers->BeginFrame();
 		// start the back end up again with the new command list

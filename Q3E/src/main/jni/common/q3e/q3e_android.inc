@@ -246,6 +246,11 @@ Q3Ebool using_external_libs = Q3E_FALSE;
 // Continue when missing OpenGL context
 volatile Q3Ebool continue_when_no_gl_context = Q3E_FALSE;
 
+// VR (OpenXR): application was started as a VR app, see Q3E_InitialContext_t
+void *q3e_java_vm = NULL; // JavaVM *
+void *q3e_vr_activity = NULL; // jobject (global reference)
+int q3e_vr_mode = 0;
+
 // Surface window
 volatile ANativeWindow *native_window = NULL;
 static volatile Q3Ebool window_changed = Q3E_FALSE;
@@ -766,6 +771,10 @@ void Q3E_SetInitialContext(const void *context)
     native_window = ptr->window;
     screen_width = ptr->width;
     screen_height = ptr->height;
+
+    q3e_java_vm = ptr->javaVM;
+    q3e_vr_activity = ptr->vrActivity;
+    q3e_vr_mode = ptr->vrMode;
 }
 
 #ifdef __cplusplus

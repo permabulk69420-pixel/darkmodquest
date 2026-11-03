@@ -18,6 +18,8 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #include "../framework/GamepadInput.h"
 #if !defined(__ANDROID__)
 #include <GLFW/glfw3.h>
+#else
+#include "../renderer/vr/OpenXRBackend.h"
 #endif
 
 idCVar in_padMouseSpeed( "in_padMouseSpeed", "2.5", CVAR_GAME|CVAR_FLOAT|CVAR_ARCHIVE, "The speed at which the mouse cursor moves from gamepad input" );
@@ -30,6 +32,13 @@ namespace {
 	GLFWgamepadstate currentState;
 	idList<sysEvent_t> collectedEvents;
 	std::map<int, int> buttonMap;
+}
+#else
+namespace {
+	// Android: the only gamepad is the pair of VR controllers, see renderer/vr/OpenXRInput.cpp
+	vrControllerState_t vrState;
+	vrControllerState_t vrPrevState;
+	idList<sysEvent_t> collectedEvents;
 }
 #endif
 
@@ -139,7 +148,74 @@ int Sys_PollGamepadInputEvents() {
 
 	return collectedEvents.Num();
 #else
-	return 0;
+	if ( !vrBackend->IsActive() ) {
+		return 0;
+	}
+
+	vrBackend->PollControllers( vrState );	// a neutral state if there is no input focus, so everything gets released
+
+	const float deadZone = idMath::Fabs( in_padDeadZone.GetFloat() );
+	for ( int i = 0; i < 4; ++i ) {
+		if ( vrState.axes[i] < deadZone && vrState.axes[i] > -deadZone ) {
+			vrState.axes[i] = 0.0f;
+		}
+	}
+
+	for ( int i = 0; i < PAD_NUM_BUTTONS; ++i ) {
+		if ( vrState.buttons[i] != vrPrevState.buttons[i] ) {
+			collectedEvents.AddGrow( sysEvent_t{ SE_PAD_BUTTON, i, vrState.buttons[i] ? 1 : 0, 0, nullptr } );
+		}
+	}
+
+	int invRX = in_padInverseRX.GetBool() ? -1 : 1;
+	int invRY = in_padInverseRY.GetBool() ? -1 : 1;
+	collectedEvents.AddGrow( sysEvent_t{ SE_PAD_AXIS, PAD_AXIS_LX, (int)( 127.f * vrState.axes[0] ), 0, nullptr } );
+	collectedEvents.AddGrow( sysEvent_t{ SE_PAD_AXIS, PAD_AXIS_LY, (int)( 127.f * vrState.axes[1] ), 0, nullptr } );
+	collectedEvents.AddGrow( sysEvent_t{ SE_PAD_AXIS, PAD_AXIS_RX, invRX * (int)( 127.f * vrState.axes[2] ), 0, nullptr } );
+	collectedEvents.AddGrow( sysEvent_t{ SE_PAD_AXIS, PAD_AXIS_RY, invRY * (int)( 127.f * vrState.axes[3] ), 0, nullptr } );
+
+	vrPrevState = vrState;
+
+	bool doMouseEvents = !uiManager->IsBindHandlerActive();
+
+	for ( sysEvent_t &ev : collectedEvents ) {
+		Sys_QueEvent( 0, ev.evType, ev.evValue, ev.evValue2, ev.evPtrLength, ev.evPtr );
+		// hack: send specific keys also as mouse input to make GUI usable
+		if ( doMouseEvents ) {
+			if ( ev.evType == SE_PAD_BUTTON && ( ev.evValue == PAD_A || ev.evValue == PAD_R1 || ev.evValue == PAD_R2 ) ) {
+				Sys_QueEvent( 0, SE_KEY, K_MOUSE1, ev.evValue2, 0, nullptr );
+			}
+			if ( ev.evType == SE_PAD_BUTTON && ( ev.evValue == PAD_B || ev.evValue == PAD_L1 || ev.evValue == PAD_L2 ) ) {
+				Sys_QueEvent( 0, SE_KEY, K_MOUSE2, ev.evValue2, 0, nullptr );
+			}
+		}
+	}
+
+	if ( doMouseEvents ) {
+		// hack: send stick movement as mouse delta to move the cursor in GUIs with the controllers
+		int speed = glConfig.vidWidth * in_padMouseSpeed.GetFloat() / 640.f;
+		int xDelta = speed * ( vrState.axes[0] + vrState.axes[2] );
+		int yDelta = speed * -( vrState.axes[1] + vrState.axes[3] );	// stick up is positive, screen y grows downwards
+		if ( xDelta != 0 || yDelta != 0 ) {
+			Sys_QueEvent( 0, SE_MOUSE, xDelta, yDelta, 0, nullptr );
+		}
+
+		// send regular mouse wheel messages while the right stick is flicked up/down
+		static uint64_t lastWheelUpdate = 0;
+		if ( Sys_GetTimeMicroseconds() - lastWheelUpdate >= 100000 ) {
+			lastWheelUpdate = Sys_GetTimeMicroseconds();
+			if ( vrState.buttons[PAD_UP] ) {
+				Sys_QueEvent( 0, SE_KEY, K_MWHEELUP, 1, 0, nullptr );
+				Sys_QueEvent( 0, SE_KEY, K_MWHEELUP, 0, 0, nullptr );
+			}
+			if ( vrState.buttons[PAD_DOWN] ) {
+				Sys_QueEvent( 0, SE_KEY, K_MWHEELDOWN, 1, 0, nullptr );
+				Sys_QueEvent( 0, SE_KEY, K_MWHEELDOWN, 0, 0, nullptr );
+			}
+		}
+	}
+
+	return collectedEvents.Num();
 #endif
 }
 
@@ -155,7 +231,15 @@ int Sys_ReturnGamepadInputEvent( int n, int &type, int &id, int &value ) {
 	value = ev.evValue2;
 	return 1;
 #else
-	return 0;
+	if ( n < 0 || n >= collectedEvents.Num() ) {
+		return 0;
+	}
+
+	sysEvent_t &ev = collectedEvents[n];
+	type = ev.evType;
+	id = ev.evValue;
+	value = ev.evValue2;
+	return 1;
 #endif
 }
 
@@ -164,13 +248,11 @@ void Sys_GetCombinedAxisDeflection( int &x, int &y ) {
 	x = 127 * (currentState.axes[GLFW_GAMEPAD_AXIS_LEFT_X] + currentState.axes[GLFW_GAMEPAD_AXIS_RIGHT_X]);
 	y = -127 * (currentState.axes[GLFW_GAMEPAD_AXIS_LEFT_Y] + currentState.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y]);
 #else
-	x = 0;
-    y = 0;
+	x = 127 * ( vrState.axes[0] + vrState.axes[2] );
+	y = 127 * ( vrState.axes[1] + vrState.axes[3] );
 #endif
 }
 
 void Sys_EndGamepadInputEvents() {
-#if !defined(__ANDROID__)
 	collectedEvents.SetNum( 0 );
-#endif
 }

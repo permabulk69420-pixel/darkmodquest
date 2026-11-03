@@ -33,6 +33,9 @@ import java.io.FileWriter;
 public class Q3EJNI {	
 	public static native void setCallbackObject(Object obj);
 
+	// VR (OpenXR): tell the engine that it is running as a VR app and give it the Activity (needed by OpenXR on Android)
+	public static native void SetVRContext(android.app.Activity activity, boolean enabled);
+
     public static native boolean init(
             String LibPath, // engine's library file path
             String nativeLibPath, // apk's dynamic library directory path

@@ -53,6 +53,14 @@ void GLimp_ActivateContext() {
     Q3E_ActivateContext();
 }
 
+// Handles of the EGL display/config/context (EGLDisplay etc. are opaque pointers).
+// OpenXR needs them to create a session that renders with our GL context.
+void GLimp_GetEGLHandles( void **display, void **config, void **context ) {
+    *display = (void *)eglDisplay;
+    *config = (void *)eglConfig;
+    *context = (void *)eglContext;
+}
+
 void GLimp_DeactivateContext() {
     Q3E_DeactivateContext();
 }

@@ -238,6 +238,11 @@ typedef enum {							// #define RENDERTOOLS_SKIP_ID			-1 // DARKMOD_LG_VIEWID
 } viewID_t;								// The lightgem viewid defines the viewid that is to be used for the lightgem surfacetestmodel
 										// static const int	DARKMOD_LG_VIEWID =	-1;
 
+typedef struct {
+	idVec3		origin;
+	idMat3		axis;
+} orientation_t;
+
 typedef struct renderView_s {
 	// player views will set this to a non-zero integer for model suppress / allow
 	// subviews (mirrors, cameras, etc) will always clear it to zero
@@ -251,13 +256,27 @@ typedef struct renderView_s {
 	idMat3					viewaxis;			// transformation matrix, view looks down the positive X axis
 
 	bool					cramZNear;			// for cinematics, we want to set ZNear much lower
-	bool					forceUpdate;		// for an update 
+	bool					forceUpdate;		// for an update
 	bool					isOverlay;			// stgatilov: rendered on top of previous color contents, don't clear
 
 	// time in milliseconds for shader effects and other time dependent rendering issues
 	int						time;
 	float					shaderParms[MAX_GLOBAL_SHADER_PARMS];		// can be used in any way by shader
 	const idMaterial		*globalMaterial;							// used to override everything draw
+
+	// VR (stereo) support.
+	// For stereo rendering the frontend works with one combined view that encloses the frustums of both eyes
+	// (see OpenXRBackend::AdjustRenderView). Before the backend draws each eye it re-poses the view with the
+	// freshest head pose. For that it needs the pose the view had *before* the head pose was applied.
+	idVec3					eyeorg[2];			// world space eye origins (both equal vieworg when not in stereo)
+	idVec3					initialVieworg;		// view origin without the head pose applied
+	idMat3					initialViewaxis;	// view axis without the head pose applied
+	bool					followsHead;		// pose of this view is driven by the headset (main view and views derived from it)
+	bool					fixedOrigin;		// only rotates with the headset, never translates (portal sky)
+	float					nearZOffset;		// distance of the near plane from the combined view origin, see above
+	bool					isMirror;			// this view is a mirror image of a followsHead view
+	orientation_t			mirrorSurface;		// mirror transform that was applied to get this view
+	orientation_t			mirrorCamera;
 } renderView_t;
 
 

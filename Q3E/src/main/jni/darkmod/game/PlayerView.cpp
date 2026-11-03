@@ -19,6 +19,8 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 
 #include "renderer/resources/Image.h"
 #include "Game_local.h"
+#include "renderer/tr_local.h"
+#include "renderer/vr/OpenXRBackend.h"
 
 static int MakePowerOfTwo( int num ) {
 	int		pot;
@@ -958,6 +960,14 @@ void idPlayerView::RenderPlayerView( idUserInterface *hud )
 	player->CheckForXrayOverlay();
 
 	const renderView_t *view = player->GetRenderView();
+
+	// VR: the view we got is the one of the player's body; add the pose of the headset to it
+	renderView_t vrView;
+	if ( view && vrBackend->IsActive() && !frameData->render2D ) {
+		vrView = *view;
+		vrBackend->AdjustRenderView( &vrView );
+		view = &vrView;
+	}
 
 	if(g_skipViewEffects.GetBool())
 	{

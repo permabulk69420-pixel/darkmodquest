@@ -23,14 +23,18 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <!-- Mouse -->
     <uses-feature android:name="android.hardware.type.pc" android:required="false" />
+    <!-- VR headset (Meta Quest): optional, the app also runs as a normal Android app -->
+    <uses-feature android:name="android.hardware.vr.headtracking" android:required="false" android:version="1" />
     <!-- Audio -->
     <uses-feature android:name="android.hardware.audio.low_latency" android:required="false" />
     <uses-feature android:name="android.software.input_methods" android:required="false" />
 
 
+    <!-- the OpenXR loader (VR on Meta Quest) declares a higher minSdk than this app; it is only used when running in VR -->
     <uses-sdk
         android:targetSdkVersion="30"
-        tools:ignore="GradleOverrides" />
+        tools:ignore="GradleOverrides"
+        tools:overrideLibrary="org.khronos.openxr.openxr_loader_for_android" />
 
     <uses-permission android:name="android.permission.ACCESS_SUPERUSER" />
     <uses-permission android:name="android.permission.INTERNET" />
@@ -94,6 +98,23 @@
             android:name="com.n0n3m4.q3e.Q3EMain"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize">
         </activity>   
+        <!-- The Dark Mod in VR for Meta Quest: gets its own launcher entry, marked as an immersive (VR) activity -->
+        <meta-data android:name="com.oculus.supportedDevices" android:value="quest2|quest3|quest3s|questpro" />
+        <activity android:label="The Dark Mod VR"
+            android:screenOrientation="landscape"
+            android:launchMode="singleTask"
+            android:exported="true"
+            android:resizeableActivity="false"
+            android:excludeFromRecents="false"
+            android:name="com.n0n3m4.q3e.Q3EVRMain"
+            android:configChanges="density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="com.oculus.intent.category.VR" />
+                <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HEADSET" />
+            </intent-filter>
+        </activity>
         <activity android:label="@string/app_name"
             android:screenOrientation="landscape"
             android:launchMode="singleTask"

@@ -271,6 +271,12 @@ public:
 	idAngles				viewAngles;			// player view angles
 	idAngles				cmdAngles;			// player cmd angles
 
+	// VR: In VR the player's body only turns with the controllers (vrBodyAngles, yaw only), while the headset
+	// adds the head's rotation on top. viewAngles then is the direction the player is looking at, which is what
+	// the game uses for aiming, frobbing and so on. Movement and the base of the rendered view use the body.
+	idAngles				vrBodyAngles;
+	bool					vrBodyValid;
+
 	int						buttonMask;
 	int						oldButtons;
 	int						oldFlags;
@@ -665,7 +671,10 @@ public:
 	virtual bool			CanGreet() override; // grayman #3338
 
 	virtual void			GetViewPos( idVec3 &origin, idMat3 &axis ) const override;
+	// like GetViewPos, but ignores the direction the head is looking in (VR); this is the view the renderer starts with
+	void					GetBodyViewPos( idVec3 &origin, idMat3 &axis ) const;
 	void					OffsetThirdPersonView( float angle, float range, float height, bool clip );
+	void					GetViewPosForAngles( const idAngles &baseAngles, idVec3 &origin, idMat3 &axis ) const;
 
 	bool					Give( const char *statname, const char *value );
 	void					GiveItem( const char *name );

@@ -141,6 +141,7 @@ idMat4 RB_GetShaderTextureMatrix( const float *shaderRegisters, const textureSta
 static const int DSF_VIEW_INSIDE_SHADOW	= 1;
 static const int DSF_SOFT_PARTICLE = 2; // #3878
 static const int DSF_BLOCK_SELF_SHADOWS = 4; // #6571: used when light interaction and self-shadows are computed in one draw call
+static const int DSF_GUI_SURF = 8; // VR: surface of an in-world GUI, its modelview matrix is not in any viewEntity_t chain
 
 struct viewLight_s;
 
@@ -695,7 +696,7 @@ typedef struct frameMemoryBlock_s {
 // contained in a frameData_t.  This entire structure is
 // duplicated so the front and back end can run in parallel
 // on an SMP machine
-typedef struct {
+typedef struct frameData_s {
 	std::atomic<int>	frameMemoryAllocated;
 	std::atomic<int>	frameMemoryUsed;
 	byte				*frameMemory;
@@ -710,6 +711,10 @@ typedef struct {
 	// commands can be inserted at the front if needed, as for required
 	// dynamically generated textures
 	emptyCommand_t		*cmdHead, *cmdTail;		// may be of other command type based on commandId
+
+	// VR: if set, the 3D contents of this frame must not be drawn stereoscopically (e.g. scripted camera
+	// views / cutscenes) but flat onto the UI overlay instead. Reset every frame in R_ToggleSmpFrame.
+	bool				render2D;
 } frameData_t;
 
 extern	frameData_t		*frameData;
@@ -1397,6 +1402,10 @@ void R_TransposeGLMatrix( const float in[16], float out[16] );
 void R_SetViewMatrix( viewDef_t &viewDef );
 void R_SetupViewFrustum( viewDef_t &viewDef );
 void R_SetupProjection( viewDef_t &viewDef );
+
+// mirroring helpers from tr_subview.cpp (also used when re-posing mirror views for each eye in VR)
+void R_MirrorPoint( const idVec3 in, orientation_t *surface, orientation_t *camera, idVec3 &out );
+void R_MirrorVector( const idVec3 in, orientation_t *surface, orientation_t *camera, idVec3 &out );
 
 // corrected this one.
 // note: "out" transform is equivalent to first applying transform "a", then transform "b"

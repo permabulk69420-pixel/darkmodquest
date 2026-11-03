@@ -190,6 +190,8 @@ void idGuiModel::EmitSurface( guiModelSurface_t *surf, float modelMatrix[16], fl
 	// the just added surface is the last in view (it was non-deferred call)
 	drawSurf_t *drawSurf = tr.viewDef->drawSurfs[tr.viewDef->numDrawSurfs - 1];
 	assert( drawSurf->material == surf->material );
+	// VR: the modelview matrix of this surface lives in a private viewEntity_t which is not in the view's entity chain
+	drawSurf->dsFlags |= DSF_GUI_SURF;
 	// stgatilov #6434: check for subviews connected to GUI overlays
 	ProcessOverlaySubviews( drawSurf );
 }

@@ -104,6 +104,9 @@ public class Q3EMain extends Activity
 
         Q3E.activity = this;
 
+        // tell the engine whether it runs as a VR app (set on every start, the process may be reused)
+        Q3EJNI.SetVRContext(this, IsVRMode());
+
         keyboard = new Q3EKeyboard(this);
         Q3E.keyboard = keyboard;
 
@@ -171,6 +174,12 @@ public class Q3EMain extends Activity
 
         // init GUI component
         InitGUI();
+    }
+
+    /** true if this activity runs the game as a VR (OpenXR) application, see Q3EVRMain */
+    protected boolean IsVRMode()
+    {
+        return false;
     }
 
     @Override

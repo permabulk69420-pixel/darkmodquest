@@ -1215,7 +1215,7 @@ static bool R_PotentiallyInsideInfiniteShadow( const srfTriangles_t *occluder,
 	// expand the bounds to account for the near clip plane, because the
 	// view could be mathematically outside, but if the near clip plane
 	// chops a volume edge, the zpass rendering would fail.
-	float	znear = r_znear.GetFloat();
+	float	znear = r_znear.GetFloat() + tr.viewDef->renderView.nearZOffset;
 	if ( tr.viewDef->renderView.cramZNear ) {
 		znear *= 0.25f;
 	}
@@ -1596,6 +1596,12 @@ void idInteraction::AddActiveInteraction( void ) {
 
 			// see if we can avoid using the shadow volume caps
 			bool inside = R_PotentiallyInsideInfiniteShadow( sint->ambientTris, localViewOrigin, localLightOrigin );
+			if ( tr.viewDef->renderView.followsHead ) {
+				// VR: the view we are culling for is a combined view enclosing both eyes, and the backend will
+				// draw each eye from its own position. We cannot know which volumes an eye is inside of, so be
+				// conservative and always draw the caps (zfail-safe).
+				inside = true;
+			}
 
 			// stgatilov: depthbounds of shadow volumes are passed to glDepthBoundsTest in stencil shadows rendering
 			// so we cannot reduce them to shadow volume geometry, and here we restore them to light's depthbounds

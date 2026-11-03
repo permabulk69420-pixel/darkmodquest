@@ -123,6 +123,10 @@ jobject q3eCallbackObj=0;
 static const jbyte *audio_track_buffer = NULL;
 static int mouse_available = 0;
 
+// VR (OpenXR) launch state, set from Java before the engine is initialized
+static jobject vr_activity = NULL;
+static int vr_mode = 0;
+
 // game main thread
 static pthread_t				main_thread;
 
@@ -501,6 +505,20 @@ JNIEXPORT void JNICALL Java_com_n0n3m4_q3e_Q3EJNI_setCallbackObject(JNIEnv *env,
 #endif
 }
 
+// Called by the VR launcher activity before the engine is initialized
+JNIEXPORT void JNICALL Java_com_n0n3m4_q3e_Q3EJNI_SetVRContext(JNIEnv *env, jclass c, jobject activity, jboolean enabled)
+{
+	if(vr_activity)
+	{
+		(*env)->DeleteGlobalRef(env, vr_activity);
+		vr_activity = NULL;
+	}
+	vr_mode = enabled ? 1 : 0;
+	if(enabled && activity)
+		vr_activity = (*env)->NewGlobalRef(env, activity);
+	LOGI("VR mode: %s", vr_mode ? "on" : "off");
+}
+
 static void setup_Q3E_callback(void)
 {
 	Q3E_Callback_t callback;
@@ -645,6 +663,10 @@ JNIEXPORT jboolean JNICALL Java_com_n0n3m4_q3e_Q3EJNI_init(JNIEnv *env, jclass c
 	context.window = window;
 	context.width = width;
 	context.height = height;
+
+	context.javaVM = jVM;
+	context.vrActivity = vr_activity;
+	context.vrMode = vr_mode;
 
 	Q3E_PrintInitialContext(&context);
 

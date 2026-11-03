@@ -239,6 +239,7 @@ void R_ToggleSmpFrame( void ) {
 
 	frameData->frameMemoryAllocated = bytesNeededForAlignment;
 	frameData->frameMemoryUsed = 0;
+	frameData->render2D = false;
 
 	R_ClearCommandChain( frameData );
 }
@@ -1035,7 +1036,7 @@ void R_SetupProjection( viewDef_t &viewDef ) {
 		jitterx = jittery = 0;
 	}
 
-	float zNear = r_znear.GetFloat();
+	float zNear = r_znear.GetFloat() + viewDef.renderView.nearZOffset;	// VR: the combined stereo view sits behind the eyes
 	if ( tr.viewDef->renderView.cramZNear ) {
 		zNear *= 0.25;
 	}
@@ -1084,7 +1085,7 @@ void R_SetupViewFrustum( viewDef_t &viewDef ) {
 	// eventually, plane five will be the rear clipping plane for fog
 	float dNear, dFar, dLeft, dUp;
 
-	dNear = r_znear.GetFloat();
+	dNear = r_znear.GetFloat() + viewDef.renderView.nearZOffset;
 
 	if ( viewDef.renderView.cramZNear ) {
 		dNear *= 0.25f;

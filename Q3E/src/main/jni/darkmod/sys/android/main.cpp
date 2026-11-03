@@ -478,6 +478,22 @@ bool GLimp_CheckGLInitialized(void)
     return Q3E_CheckNativeWindowChanged();
 }
 
+// VR (OpenXR) launch context, handed down from the Java launcher through Q3E_InitialContext_t
+bool Sys_VR_IsRequested(void)
+{
+    return q3e_vr_mode != 0;
+}
+
+void *Sys_VR_GetJavaVM(void)
+{
+    return q3e_java_vm;
+}
+
+void *Sys_VR_GetActivity(void)
+{
+    return q3e_vr_activity;
+}
+
 /*
 ===============
 main

@@ -62,6 +62,11 @@ typedef struct
     ANativeWindow *window;
     int width;
     int height;
+
+    // VR (OpenXR). Only used by engines with a VR renderer (The Dark Mod)
+    void *javaVM; // JavaVM *
+    void *vrActivity; // jobject: global reference to the Activity (Android Context) that was started as VR app
+    int vrMode; // application was started in VR mode
 } Q3E_InitialContext_t;
 
 // Android::JNI call DOOM3 after main()

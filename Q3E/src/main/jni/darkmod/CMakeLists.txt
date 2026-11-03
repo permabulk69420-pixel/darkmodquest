@@ -401,6 +401,24 @@ elseif (ANDROID)
     target_link_libraries(TheDarkMod z dl android EGL)
     target_include_directories(TheDarkMod PRIVATE "../common")
     #set_target_properties(TheDarkMod PROPERTIES LINK_FLAGS "-static-libstdc++")
+
+    # VR on Meta Quest (OpenXR). The loader comes as a prefab package from Gradle:
+    # org.khronos.openxr:openxr_loader_for_android, see Q3E/build.gradle
+    find_package(OpenXR QUIET CONFIG)
+    if (NOT TARGET OpenXR::openxr_loader AND TDM_OPENXR_PREFAB)
+        # manual builds outside of Gradle: -DTDM_OPENXR_PREFAB=<directory of the extracted aar>/prefab
+        add_library(OpenXR::openxr_loader SHARED IMPORTED)
+        set_target_properties(OpenXR::openxr_loader PROPERTIES
+            IMPORTED_LOCATION "${TDM_OPENXR_PREFAB}/modules/openxr_loader/libs/android.${ANDROID_ABI}/libopenxr_loader.so"
+            INTERFACE_INCLUDE_DIRECTORIES "${TDM_OPENXR_PREFAB}/modules/headers/include")
+    endif ()
+    if (TARGET OpenXR::openxr_loader)
+        message(STATUS "OpenXR loader found: building with VR support")
+        target_compile_definitions(TheDarkMod PRIVATE TDM_VR_OPENXR)
+        target_link_libraries(TheDarkMod OpenXR::openxr_loader log)
+    else ()
+        message(WARNING "OpenXR loader not found: building WITHOUT VR support")
+    endif ()
 elseif (UNIX)
 	target_link_libraries(TheDarkMod pthread dl stdc++fs X11 Xext Xxf86vm)
 

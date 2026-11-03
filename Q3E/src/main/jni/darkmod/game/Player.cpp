@@ -35,6 +35,8 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #include <numeric>
 
 #include "../sys/sys_padinput.h"
+#include "renderer/vr/OpenXRBackend.h"
+#include "renderer/tr_local.h"
 
 /*
 ===============================================================================
@@ -523,6 +525,8 @@ idPlayer::idPlayer() :
 	spawnAngles				= ang_zero;
 	viewAngles				= ang_zero;
 	cmdAngles				= ang_zero;
+	vrBodyAngles			= ang_zero;
+	vrBodyValid				= false;
 
 	oldButtons				= 0;
 	buttonMask				= 0;
@@ -5153,6 +5157,11 @@ void idPlayer::UpdateViewAngles( void )
 {
 	int i;
 	idAngles delta;
+	// VR: undo the head rotation that was added to the view angles last tick; the calculation below works on the body
+	if ( vrBodyValid ) {
+		viewAngles = vrBodyAngles;
+		vrBodyValid = false;
+	}
 	idAngles TestAngles = viewAngles;
 
 	if ( !noclip && 
@@ -5219,6 +5228,20 @@ void idPlayer::UpdateViewAngles( void )
 
 	// save in the log for analyzing weapon angle offsets
 	loggedViewAngles[ gameLocal.framenum & (NUM_LOGGED_VIEW_ANGLES-1) ] = viewAngles;
+
+	// VR: turn the view angles into the gaze direction. The body keeps only its yaw (the controllers turn it,
+	// the headset takes care of looking up and down).
+	{
+		idQuat head;
+		if ( vrBackend->GetHeadOrientation( head ) ) {
+			vrBodyAngles = idAngles( 0.0f, viewAngles.yaw, 0.0f );
+			vrBodyValid = true;
+			const idMat3 gaze = head.ToMat3() * vrBodyAngles.ToMat3();
+			idAngles gazeAngles = gaze.ToAngles();
+			gazeAngles.roll = 0.0f;
+			viewAngles = gazeAngles;
+		}
+	}
 
 Quit:
 	return;
@@ -6919,7 +6942,7 @@ void idPlayer::Move( void )
 	}
 
 	physicsObj.SetDebugLevel( g_debugMove.GetBool() );
-	physicsObj.SetPlayerInput( usercmd, viewAngles );
+	physicsObj.SetPlayerInput( usercmd, vrBodyValid ? vrBodyAngles : viewAngles );
 
 	// FIXME: physics gets disabled somehow
 	BecomeActive( TH_PHYSICS );
@@ -8639,6 +8662,14 @@ idPlayer::GetViewPos
 ===============
 */
 void idPlayer::GetViewPos( idVec3 &origin, idMat3 &axis ) const {
+	GetViewPosForAngles( viewAngles, origin, axis );
+}
+
+void idPlayer::GetBodyViewPos( idVec3 &origin, idMat3 &axis ) const {
+	GetViewPosForAngles( vrBodyValid ? vrBodyAngles : viewAngles, origin, axis );
+}
+
+void idPlayer::GetViewPosForAngles( const idAngles &baseAngles, idVec3 &origin, idMat3 &axis ) const {
 	idAngles angles;
 
 	if ( usePeekView ) // grayman #4882
@@ -8656,7 +8687,7 @@ void idPlayer::GetViewPos( idVec3 &origin, idMat3 &axis ) const {
 		origin = GetEyePosition();
 	} else {
 		origin = GetEyePosition() + viewBob;
-		angles = viewAngles + viewBobAngles + physicsObj.GetViewLeanAngles() + playerView.AngleOffset();
+		angles = baseAngles + viewBobAngles + physicsObj.GetViewLeanAngles() + playerView.AngleOffset();
 
 		axis = angles.ToMat3() * physicsObj.GetGravityAxis();
 
@@ -8702,7 +8733,7 @@ void idPlayer::CalculateFirstPersonView(void)
 	else
 	{
 		// offset for local bobbing and kicks
-		GetViewPos(firstPersonViewOrigin, firstPersonViewAxis);
+		GetBodyViewPos(firstPersonViewOrigin, firstPersonViewAxis);
 #if 0
 		// shakefrom sound stuff only happens in first person
 		firstPersonViewAxis = firstPersonViewAxis * playerView.ShakeAxis();
@@ -8795,6 +8826,8 @@ void idPlayer::CalculateRenderView( void ) {
 
 	// check if we should be drawing from a camera's POV
 	if ( !noclip && (gameLocal.GetCamera() || privateCameraView) ) {
+		// VR: scripted camera views are shown flat on the overlay, the headset must not move them around
+		frameData->render2D = true;
 		// get origin, axis, and fov
 		if ( privateCameraView ) {
 			privateCameraView->GetViewParms( renderView );
