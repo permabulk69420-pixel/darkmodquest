@@ -461,12 +461,37 @@ class Q3EGameHelper
             cmd += " " + Q3E.q3ei.start_temporary_extra_command/* + " +set harm_fs_gameLibDir " + lib_dir*/;
         }
 
+        // The Dark Mod in VR: settings from the launcher
+        if(Q3E.q3ei.isTDM && ((Q3EMain)m_context).IsVRMode())
+            cmd = AddVRSettings(preferences, cmd);
+
         String binDir = Q3E.q3ei.GetGameDataDirectoryPath(null);
         cmd = binDir + "/" + cmd;
         Q3E.q3ei.cmd = cmd;
 
         // load controller button keymap
         LoadControllerKeymap();
+    }
+
+    // Only settings that were changed in the launcher are passed on, everything else keeps the game's own default.
+    private String AddVRSettings(SharedPreferences preferences, String cmd)
+    {
+        KidTechCommand command = Q3E.q3ei.GetGameCommandEngine(cmd);
+        if(preferences.contains(Q3EPreference.pref_vr_resolution_scale))
+            command.SetProp("vr_resolutionScale", String.valueOf(preferences.getInt(Q3EPreference.pref_vr_resolution_scale, 100) / 100.0f));
+        if(preferences.contains(Q3EPreference.pref_vr_foveation))
+            command.SetProp("vr_foveation", String.valueOf(preferences.getInt(Q3EPreference.pref_vr_foveation, 0)));
+        if(preferences.contains(Q3EPreference.pref_vr_refresh_rate))
+            command.SetProp("vr_displayRefreshRate", String.valueOf(preferences.getInt(Q3EPreference.pref_vr_refresh_rate, 0)));
+        if(preferences.contains(Q3EPreference.pref_vr_srgb))
+            command.SetProp("vr_srgbSwapchain", preferences.getBoolean(Q3EPreference.pref_vr_srgb, false) ? "1" : "0");
+        if(preferences.contains(Q3EPreference.pref_vr_hud_height))
+            command.SetProp("vr_uiOverlayHeight", String.valueOf(preferences.getInt(Q3EPreference.pref_vr_hud_height, 180) / 100.0f));
+        if(preferences.contains(Q3EPreference.pref_vr_hud_distance))
+            command.SetProp("vr_uiOverlayDistance", String.valueOf(preferences.getInt(Q3EPreference.pref_vr_hud_distance, 250) / 100.0f));
+        if(preferences.contains(Q3EPreference.pref_vr_hud_offset))
+            command.SetProp("vr_uiOverlayVerticalOffset", String.valueOf(preferences.getInt(Q3EPreference.pref_vr_hud_offset, -20) / 100.0f));
+        return command.toString();
     }
 
     private String FindDLL_idTech4(String fs_game)

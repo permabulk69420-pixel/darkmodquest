@@ -2189,6 +2189,52 @@ public class GameLauncher extends Activity
 	{
 		V.tdm_useMediumPrecision.setChecked(getProp("harm_r_useMediumPrecision", false));
 		V.tdm_useMediumPrecision.setOnCheckedChangeListener(m_checkboxChangeListener);
+
+		// The Dark Mod VR
+		SetupVRSpinner(V.vr_resolution_scale, R.array.vr_resolution_scale_values, Q3EPreference.pref_vr_resolution_scale, 100);
+		SetupVRSpinner(V.vr_foveation, R.array.vr_foveation_values, Q3EPreference.pref_vr_foveation, 0);
+		SetupVRSpinner(V.vr_refresh_rate, R.array.vr_refresh_rate_values, Q3EPreference.pref_vr_refresh_rate, 0);
+		SetupVRSpinner(V.vr_hud_height, R.array.vr_hud_height_values, Q3EPreference.pref_vr_hud_height, 180);
+		SetupVRSpinner(V.vr_hud_distance, R.array.vr_hud_distance_values, Q3EPreference.pref_vr_hud_distance, 250);
+		SetupVRSpinner(V.vr_hud_offset, R.array.vr_hud_offset_values, Q3EPreference.pref_vr_hud_offset, -20);
+
+		final SharedPreferences vrPrefs = PreferenceManager.getDefaultSharedPreferences(this);
+		V.vr_srgb.setChecked(vrPrefs.getBoolean(Q3EPreference.pref_vr_srgb, false));
+		V.vr_srgb.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+			@Override
+			public void onCheckedChanged(CompoundButton buttonView, boolean isChecked)
+			{
+				vrPrefs.edit().putBoolean(Q3EPreference.pref_vr_srgb, isChecked).commit();
+			}
+		});
+	}
+
+	// A drop-down for a VR setting. The setting is only stored once it has really been changed.
+	private void SetupVRSpinner(Spinner spinner, int valuesArray, final String key, final int defaultValue)
+	{
+		final int[] values = getResources().getIntArray(valuesArray);
+		final SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+		final int current = prefs.getInt(key, defaultValue);
+		int index = 0;
+		for (int i = 0; i < values.length; i++)
+		{
+			if (values[i] == current)
+				index = i;
+		}
+		spinner.setSelection(index, false);
+		spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+			@Override
+			public void onItemSelected(AdapterView<?> parent, View view, int position, long id)
+			{
+				if (position >= 0 && position < values.length && values[position] != prefs.getInt(key, defaultValue))
+					prefs.edit().putInt(key, values[position]).commit();
+			}
+
+			@Override
+			public void onNothingSelected(AdapterView<?> parent)
+			{
+			}
+		});
 	}
 
 	private void SetupUI_RealRTCW()
@@ -5033,6 +5079,13 @@ public class GameLauncher extends Activity
 		public RadioGroup   zdoom_gl_version;
 		public LinearLayout tdm_section;
 		public CheckBox tdm_useMediumPrecision;
+		public Spinner vr_resolution_scale;
+		public Spinner vr_foveation;
+		public Spinner vr_refresh_rate;
+		public Spinner vr_hud_height;
+		public Spinner vr_hud_distance;
+		public Spinner vr_hud_offset;
+		public CheckBox vr_srgb;
 		public LinearLayout fteqw_section;
 		public RadioGroup fteqw_vid_renderer;
 		public SeekBar consoleHeightFracValue;
@@ -5249,6 +5302,13 @@ public class GameLauncher extends Activity
 			zdoom_gl_version = findViewById(R.id.zdoom_gl_version);
 			tdm_section = findViewById(R.id.tdm_section);
 			tdm_useMediumPrecision = findViewById(R.id.tdm_useMediumPrecision);
+			vr_resolution_scale = findViewById(R.id.vr_resolution_scale);
+			vr_foveation = findViewById(R.id.vr_foveation);
+			vr_refresh_rate = findViewById(R.id.vr_refresh_rate);
+			vr_hud_height = findViewById(R.id.vr_hud_height);
+			vr_hud_distance = findViewById(R.id.vr_hud_distance);
+			vr_hud_offset = findViewById(R.id.vr_hud_offset);
+			vr_srgb = findViewById(R.id.vr_srgb);
 			fteqw_section = findViewById(R.id.fteqw_section);
 			fteqw_vid_renderer = findViewById(R.id.fteqw_vid_renderer);
 			consoleHeightFracValue = findViewById(R.id.consoleHeightFracValue);

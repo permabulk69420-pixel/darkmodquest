@@ -55,6 +55,14 @@ public final class Q3EPreference
     public static final String pref_params                        = "q3e_params";
     public static final String pref_harm_fs_game                  = "q3e_harm_fs_game"; //k
     public static final String pref_harm_game_lib                 = "q3e_harm_game_lib"; //k
+    // The Dark Mod VR settings of the launcher (only present once the user has changed them)
+    public static final String pref_vr_resolution_scale           = "q3e_vr_resolution_scale"; // percent
+    public static final String pref_vr_foveation                  = "q3e_vr_foveation"; // 0..3
+    public static final String pref_vr_refresh_rate               = "q3e_vr_refresh_rate"; // Hz, 0 = headset default
+    public static final String pref_vr_srgb                       = "q3e_vr_srgb";
+    public static final String pref_vr_hud_height                 = "q3e_vr_hud_height"; // cm
+    public static final String pref_vr_hud_distance               = "q3e_vr_hud_distance"; // cm
+    public static final String pref_vr_hud_offset                 = "q3e_vr_hud_offset"; // cm
     public static final String pref_harm_user_mod                 = "q3e_harm_user_mod"; //k
     public static final String pref_harm_command_record           = "q3e_harm_command_record"; //k
     public static final String pref_harm_game_mod                 = "q3e_harm_game_mod"; //k

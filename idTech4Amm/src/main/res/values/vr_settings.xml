@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings of The Dark Mod VR (Meta Quest), shown in the launcher in the "The Dark Mod" section -->
+<resources>
+    <string name="vr_settings_title" translatable="false">The Dark Mod VR (Quest)</string>
+    <string name="vr_resolution_scale_label" translatable="false">Resolution (100% = what the headset recommends)</string>
+    <string name="vr_foveation_label" translatable="false">Foveated rendering (less detail towards the edges, faster)</string>
+    <string name="vr_refresh_rate_label" translatable="false">Display refresh rate</string>
+    <string name="vr_srgb_label" translatable="false">sRGB colour format (try it if the colours look wrong)</string>
+    <string name="vr_hud_height_label" translatable="false">HUD / menu screen size</string>
+    <string name="vr_hud_distance_label" translatable="false">HUD / menu screen distance</string>
+    <string name="vr_hud_offset_label" translatable="false">HUD / menu screen height offset</string>
+    <string name="vr_settings_hint" translatable="false">Used when the game is started in VR.</string>
+
+    <string-array name="vr_resolution_scale_labels" translatable="false">
+        <item>50%</item><item>65%</item><item>75%</item><item>85%</item><item>100%</item><item>120%</item>
+    </string-array>
+    <integer-array name="vr_resolution_scale_values">
+        <item>50</item><item>65</item><item>75</item><item>85</item><item>100</item><item>120</item>
+    </integer-array>
+
+    <string-array name="vr_foveation_labels" translatable="false">
+        <item>Off</item><item>Low</item><item>Medium</item><item>High (strongest)</item>
+    </string-array>
+    <integer-array name="vr_foveation_values">
+        <item>0</item><item>1</item><item>2</item><item>3</item>
+    </integer-array>
+
+    <string-array name="vr_refresh_rate_labels" translatable="false">
+        <item>Headset default</item><item>72 Hz</item><item>80 Hz</item><item>90 Hz</item><item>120 Hz</item>
+    </string-array>
+    <integer-array name="vr_refresh_rate_values">
+        <item>0</item><item>72</item><item>80</item><item>90</item><item>120</item>
+    </integer-array>
+
+    <!-- HUD values are centimetres -->
+    <string-array name="vr_hud_height_labels" translatable="false">
+        <item>1.2 m</item><item>1.5 m</item><item>1.8 m</item><item>2.2 m</item><item>2.6 m</item>
+    </string-array>
+    <integer-array name="vr_hud_height_values">
+        <item>120</item><item>150</item><item>180</item><item>220</item><item>260</item>
+    </integer-array>
+
+    <string-array name="vr_hud_distance_labels" translatable="false">
+        <item>1.5 m</item><item>2.0 m</item><item>2.5 m</item><item>3.0 m</item>
+    </string-array>
+    <integer-array name="vr_hud_distance_values">
+        <item>150</item><item>200</item><item>250</item><item>300</item>
+    </integer-array>
+
+    <string-array name="vr_hud_offset_labels" translatable="false">
+        <item>-50 cm</item><item>-30 cm</item><item>-20 cm</item><item>-10 cm</item><item>0 cm</item><item>+20 cm</item>
+    </string-array>
+    <integer-array name="vr_hud_offset_values">
+        <item>-50</item><item>-30</item><item>-20</item><item>-10</item><item>0</item><item>20</item>
+    </integer-array>
+</resources>
