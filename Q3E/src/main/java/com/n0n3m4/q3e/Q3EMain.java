@@ -113,6 +113,13 @@ public class Q3EMain extends Activity
         gameHelper = new Q3EGameHelper();
         gameHelper.SetContext(this);
 
+        // an activity started without the launcher may have to postpone the start (e.g. until storage access is granted)
+        if(!PrepareStart())
+        {
+            super.onCreate(savedInstanceState);
+            return;
+        }
+
         // setup fullscreen
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
 
@@ -180,6 +187,24 @@ public class Q3EMain extends Activity
     protected boolean IsVRMode()
     {
         return false;
+    }
+
+    /**
+     * Called first thing in onCreate, before any game file is touched.
+     * Return false to postpone the start of the game (the activity then stays empty); see Q3EVRMain.
+     */
+    protected boolean PrepareStart()
+    {
+        return true;
+    }
+
+    /**
+     * Called after the game was set up and before anything is written to the game folder or the engine is started.
+     * Return false (after telling the user why) to stop the start.
+     */
+    protected boolean VerifyGameData()
+    {
+        return true;
     }
 
     @Override
@@ -551,12 +576,16 @@ public class Q3EMain extends Activity
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event)
     {
+        if(null == mControlGLSurfaceView) // the game was not started (waiting for a permission, missing game files, ...)
+            return super.onKeyDown(keyCode, event);
         return mControlGLSurfaceView.OnKeyDown(keyCode, event);
     }
 
     @Override
     public boolean onKeyUp(int keyCode, KeyEvent event)
     {
+        if(null == mControlGLSurfaceView)
+            return super.onKeyUp(keyCode, event);
         return mControlGLSurfaceView.OnKeyUp(keyCode, event);
     }
 
@@ -594,7 +623,7 @@ public class Q3EMain extends Activity
             return false;
         }
         else
-            return gameHelper.checkGameFiles();
+            return gameHelper.checkGameFiles() && VerifyGameData();
     }
 
     private void SetupGame()

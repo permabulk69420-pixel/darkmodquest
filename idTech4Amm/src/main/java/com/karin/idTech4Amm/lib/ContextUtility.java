@@ -373,9 +373,7 @@ public final class ContextUtility
         if(null == activity)
             return;
         activity.finish();
-        Intent intent = activity.getPackageManager().getLaunchIntentForPackage(activity.getApplicationContext().getPackageName());
-        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        activity.startActivity(intent);
+        Q3EContextUtils.RunLauncher(activity); // not the app's default entry, that is the VR activity now
     }
 
     public static boolean OpenApp(Activity activity, String packageName)

@@ -419,7 +419,13 @@ public final class Q3EContextUtils
 
     public static void RunLauncher(Activity activity)
     {
-        Intent intent = activity.getPackageManager().getLaunchIntentForPackage(activity.getApplicationContext().getPackageName());
+        PackageManager pm = activity.getPackageManager();
+        String packageName = activity.getApplicationContext().getPackageName();
+        // The default entry of the app may be the VR activity (Q3EVRMain): ask for the launcher screen itself
+        Intent intent = new Intent(Intent.ACTION_MAIN);
+        intent.setClassName(packageName, "com.n0n3m4.DIII4A.GameLauncher");
+        if(null == intent.resolveActivity(pm))
+            intent = pm.getLaunchIntentForPackage(packageName);
         intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
         activity.startActivity(intent);
     }
