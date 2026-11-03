@@ -1,5 +1,7 @@
 package com.n0n3m4.DIII4A.launcher;
 
+import android.app.AlertDialog;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.os.Bundle;
 
@@ -8,6 +10,8 @@ import com.karin.idTech4Amm.lib.ContextUtility;
 import com.n0n3m4.DIII4A.GameLauncher;
 import com.n0n3m4.q3e.Q3ELang;
 import com.n0n3m4.q3e.Q3EMain;
+import com.n0n3m4.q3e.Q3E;
+import com.n0n3m4.q3e.Q3EVRMain;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -54,8 +58,40 @@ public final class StartGameFunc extends GameLauncherFunc
 		getgl2progs(dir+"/base/");
         */
 
+        // On a VR headset The Dark Mod runs in VR; ask whether to start it flat instead (for comparing / troubleshooting)
+        if (Q3E.q3ei.isTDM && ContextUtility.IsVRHeadset(m_gameLauncher))
+        {
+            new AlertDialog.Builder(m_gameLauncher)
+                .setTitle("Start The Dark Mod")
+                .setPositiveButton("VR", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which)
+                    {
+                        dialog.dismiss();
+                        StartActivity(true);
+                    }
+                })
+                .setNegativeButton("Flat (2D)", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which)
+                    {
+                        dialog.dismiss();
+                        StartActivity(false);
+                    }
+                })
+                .show();
+            return;
+        }
+        StartActivity(false);
+    }
+
+    private void StartActivity(boolean vr)
+    {
+        Intent intent = new Intent(m_gameLauncher, vr ? Q3EVRMain.class : Q3EMain.class);
+        if (vr)
+            intent.addCategory("com.oculus.intent.category.VR");
         m_gameLauncher.finish();
-        m_gameLauncher.startActivity(new Intent(m_gameLauncher, Q3EMain.class));
+        m_gameLauncher.startActivity(intent);
     }
 
     public void getgl2progs(String destname)

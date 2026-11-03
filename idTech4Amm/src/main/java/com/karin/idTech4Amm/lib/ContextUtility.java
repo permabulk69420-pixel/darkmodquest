@@ -376,6 +376,13 @@ public final class ContextUtility
         Q3EContextUtils.RunLauncher(activity); // not the app's default entry, that is the VR activity now
     }
 
+    /** true on a standalone VR headset (Meta Quest and similar) */
+    public static boolean IsVRHeadset(Context context)
+    {
+        return context.getPackageManager().hasSystemFeature("android.hardware.vr.headtracking")
+                || "Oculus".equalsIgnoreCase(Build.MANUFACTURER) || "Meta".equalsIgnoreCase(Build.MANUFACTURER);
+    }
+
     public static boolean OpenApp(Activity activity, String packageName)
     {
         final Intent intent = activity.getPackageManager().getLaunchIntentForPackage(packageName);

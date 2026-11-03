@@ -1702,6 +1702,8 @@ public class GameLauncher extends Activity
 		final SharedPreferences mPrefs = PreferenceManager.getDefaultSharedPreferences(this);
 
 		String gameType = mPrefs.getString(Q3EPreference.pref_harm_game, Q3EGameConstants.GAME_DOOM3);
+		if (Q3EInterface.IsDisabled(gameType)) // e.g. a build with only The Dark Mod in it
+			gameType = Q3EGameConstants.GAME_TDM;
 
 		V.main_ad_layout.setVisibility(mPrefs.getBoolean(PreferenceKey.HIDE_AD_BAR, true) ? View.GONE : View.VISIBLE);
 
