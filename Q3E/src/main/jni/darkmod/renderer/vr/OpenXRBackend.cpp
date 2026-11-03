@@ -68,6 +68,16 @@ idCVar vr_uiOverlayVerticalOffset( "vr_uiOverlayVerticalOffset", "-0.2", CVAR_RE
 
 namespace {
 
+// average orientation of two (nearly identical) orientations, safe against q and -q describing the same rotation
+inline idQuat AverageOrientation( const idQuat &a, idQuat b ) {
+	if ( a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w < 0.0f ) {
+		b = idQuat( -b.x, -b.y, -b.z, -b.w );
+	}
+	idQuat sum = a + b;
+	sum.Normalize();
+	return sum;
+}
+
 // the command chain links "base" commands; every command in it starts with the fields of emptyCommand_t
 inline const emptyCommand_t *NextCommand( const emptyCommand_t *cmd ) {
 	return static_cast<const emptyCommand_t *>( cmd->next );
@@ -1068,8 +1078,7 @@ void OpenXRBackend::AdjustRenderView( renderView_t *view ) {
 	view->fov_x = Min( 178.0f, RAD2DEG( cantedAngle + 2.0f * maxHorizFov ) + 5.0f );
 	view->fov_y = Min( 178.0f, RAD2DEG( 2.0f * maxVertFov ) + 5.0f );
 
-	idQuat viewOrientation = 0.5f * ( leftEyeRot + rightEyeRot );
-	viewOrientation.Normalize();
+	const idQuat viewOrientation = AverageOrientation( leftEyeRot, rightEyeRot );
 	const idMat3 viewAxis = viewOrientation.ToMat3();
 	idVec3 viewOrigin = 0.5f * ( leftEyePos + rightEyePos );
 	// move the combined origin back a bit, so both eye frustums fit into the combined frustum
@@ -1111,9 +1120,7 @@ bool OpenXRBackend::GetHeadOrientation( idQuat &orientation ) const {
 	if ( !impl->initialized || !impl->havePredictedViews ) {
 		return false;
 	}
-	idQuat q = XR_Quat( impl->predictedViews[0].pose.orientation ) + XR_Quat( impl->predictedViews[1].pose.orientation );
-	q.Normalize();
-	orientation = q;
+	orientation = AverageOrientation( XR_Quat( impl->predictedViews[0].pose.orientation ), XR_Quat( impl->predictedViews[1].pose.orientation ) );
 	return true;
 }
 
