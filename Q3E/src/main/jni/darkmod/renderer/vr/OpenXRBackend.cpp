@@ -55,10 +55,10 @@ extern void GLimp_GetEGLHandles( void **display, void **config, void **context )
 bool RB_Bloom( bloomCommand_t *cmd );
 void RB_CopyRender( const void *data );
 
-idCVar vr_renderScale( "vr_renderScale", "0.65", CVAR_RENDERER | CVAR_FLOAT | CVAR_ARCHIVE,
+idCVar vr_renderScale( "vr_renderScale", "1.0", CVAR_RENDERER | CVAR_FLOAT | CVAR_ARCHIVE,
 	"Resolution of the eye buffers relative to the headset's recommended resolution (takes effect on restart)", 0.25f, 2.0f );
-idCVar vr_refreshRate( "vr_refreshRate", "72", CVAR_RENDERER | CVAR_INTEGER | CVAR_ARCHIVE,
-	"Display refresh rate to request from the headset, e.g. 72, 80, 90 or 120 on Quest (takes effect on restart)" );
+idCVar vr_refreshRate( "vr_refreshRate", "0", CVAR_RENDERER | CVAR_INTEGER | CVAR_ARCHIVE,
+	"Display refresh rate to request from the headset, e.g. 72, 80, 90 or 120 on Quest. 0 = don't ask, keep the headset's setting (takes effect on restart)" );
 idCVar vr_uiOverlayHeight( "vr_uiOverlayHeight", "1.8", CVAR_RENDERER | CVAR_FLOAT | CVAR_ARCHIVE,
 	"Height of the HUD/menu screen in metres" );
 idCVar vr_uiOverlayDistance( "vr_uiOverlayDistance", "2.5", CVAR_RENDERER | CVAR_FLOAT | CVAR_ARCHIVE,
@@ -479,7 +479,7 @@ Session
 =============================================================================================
 */
 void OpenXRBackend::Impl::OnSessionBegun() {
-	if ( hasRefreshRate && pfnRequestRefreshRate && pfnEnumerateRefreshRates ) {
+	if ( vr_refreshRate.GetInteger() > 0 && hasRefreshRate && pfnRequestRefreshRate && pfnEnumerateRefreshRates ) {
 		uint32_t count = 0;
 		pfnEnumerateRefreshRates( session, 0, &count, nullptr );
 		std::vector<float> rates( count );
