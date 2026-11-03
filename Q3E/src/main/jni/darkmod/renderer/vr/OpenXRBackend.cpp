@@ -29,6 +29,7 @@ OpenXRBackend *vrBackend = &xrBackendInstance;
 #ifdef TDM_VR_OPENXR
 
 #include <mutex>
+#include <chrono>
 #include <vector>
 #include <string>
 #include <stdarg.h>
@@ -55,10 +56,10 @@ extern void GLimp_GetEGLHandles( void **display, void **config, void **context )
 bool RB_Bloom( bloomCommand_t *cmd );
 void RB_CopyRender( const void *data );
 
-idCVar vr_renderScale( "vr_renderScale", "1.0", CVAR_RENDERER | CVAR_FLOAT,
-	"Resolution of the eye buffers relative to the headset's recommended resolution (takes effect on restart)", 0.25f, 2.0f );
-idCVar vr_refreshRate( "vr_refreshRate", "0", CVAR_RENDERER | CVAR_INTEGER,
-	"Display refresh rate to request from the headset, e.g. 72, 80, 90 or 120 on Quest. 0 = don't ask, keep the headset's setting (takes effect on restart)" );
+idCVar vr_resolutionScale( "vr_resolutionScale", "1.0", CVAR_RENDERER | CVAR_FLOAT,
+	"Resolution of the eye buffers relative to the headset's recommended resolution, 1.0 = 100% (takes effect on restart, not saved: set it on the command line)", 0.25f, 2.0f );
+idCVar vr_displayRefreshRate( "vr_displayRefreshRate", "0", CVAR_RENDERER | CVAR_INTEGER,
+	"Display refresh rate to request from the headset, e.g. 72, 80, 90 or 120 on Quest. 0 = don't ask, keep the headset's setting (takes effect on restart, not saved: set it on the command line)" );
 idCVar vr_uiOverlayHeight( "vr_uiOverlayHeight", "1.8", CVAR_RENDERER | CVAR_FLOAT | CVAR_ARCHIVE,
 	"Height of the HUD/menu screen in metres" );
 idCVar vr_uiOverlayDistance( "vr_uiOverlayDistance", "2.5", CVAR_RENDERER | CVAR_FLOAT | CVAR_ARCHIVE,
@@ -126,6 +127,143 @@ idQuat XR_Quat( const XrQuaternionf &q ) {
 	return idQuat( q.z, q.x, -q.y, q.w );
 }
 
+
+/*
+Frame timing, logged every couple of seconds: how fast frames are really delivered, how long the CPU needs to
+submit a frame and how long the GPU needs to draw it (GL_EXT_disjoint_timer_query, results arrive a few frames late).
+*/
+#ifndef GL_GPU_DISJOINT_EXT
+#define GL_GPU_DISJOINT_EXT 0x8FBB
+#endif
+
+class FrameTimer {
+public:
+	void Init() {
+		glGenQueriesEXT = ( void ( * )( GLsizei, GLuint * ) )eglGetProcAddress( "glGenQueriesEXT" );
+		glDeleteQueriesEXT = ( void ( * )( GLsizei, const GLuint * ) )eglGetProcAddress( "glDeleteQueriesEXT" );
+		glBeginQueryEXT = ( void ( * )( GLenum, GLuint ) )eglGetProcAddress( "glBeginQueryEXT" );
+		glEndQueryEXT = ( void ( * )( GLenum ) )eglGetProcAddress( "glEndQueryEXT" );
+		glGetQueryObjectuivEXT = ( void ( * )( GLuint, GLenum, GLuint * ) )eglGetProcAddress( "glGetQueryObjectuivEXT" );
+		glGetQueryObjectui64vEXT = ( void ( * )( GLuint, GLenum, uint64_t * ) )eglGetProcAddress( "glGetQueryObjectui64vEXT" );
+		gpuOk = glGenQueriesEXT && glDeleteQueriesEXT && glBeginQueryEXT && glEndQueryEXT && glGetQueryObjectuivEXT && glGetQueryObjectui64vEXT;
+		if ( gpuOk ) {
+			glGenQueriesEXT( NUM_QUERIES, queries );
+		}
+		XR_Log( "frame timing: GPU timer queries %s", gpuOk ? "available" : "not available (CPU and frame rate only)" );
+	}
+	void Shutdown() {
+		if ( gpuOk ) {
+			glDeleteQueriesEXT( NUM_QUERIES, queries );
+		}
+		gpuOk = false;
+		current = -1;
+		for ( bool &p : pending ) {
+			p = false;
+		}
+	}
+	// called when xrWaitFrame returned; waitMs is how long it blocked
+	void OnFrameStart( double waitMs ) {
+		const Clock::time_point now = Clock::now();
+		if ( haveLastFrame ) {
+			const double interval = Ms( now - lastFrame );
+			sumInterval += interval;
+			maxInterval = interval > maxInterval ? interval : maxInterval;
+			++frames;
+		} else {
+			lastReport = now;
+		}
+		haveLastFrame = true;
+		lastFrame = now;
+		sumWait += waitMs;
+	}
+	void BeginGpu() {
+		if ( !gpuOk ) {
+			return;
+		}
+		PollGpu();
+		const int slot = nextQuery;
+		if ( pending[slot] ) {
+			return;	// the GPU is too far behind to take another measurement
+		}
+		glBeginQueryEXT( GL_TIME_ELAPSED_EXT, queries[slot] );
+		current = slot;
+		nextQuery = ( slot + 1 ) % NUM_QUERIES;
+	}
+	void EndGpu() {
+		if ( current >= 0 ) {
+			glEndQueryEXT( GL_TIME_ELAPSED_EXT );
+			pending[current] = true;
+			current = -1;
+		}
+	}
+	// called after the frame was submitted; cpuMs is the time spent in the stereo rendering code
+	void OnFrameEnd( double cpuMs, int eyeW, int eyeH ) {
+		sumCpu += cpuMs;
+		maxCpu = cpuMs > maxCpu ? cpuMs : maxCpu;
+
+		const Clock::time_point now = Clock::now();
+		if ( Ms( now - lastReport ) < 2000.0 || frames == 0 ) {
+			return;
+		}
+		char gpu[64] = "gpu n/a";
+		if ( gpuSamples > 0 ) {
+			snprintf( gpu, sizeof( gpu ), "gpu %.1f (max %.1f)", sumGpu / gpuSamples, maxGpu );
+		}
+		XR_Log( "perf: %.1f fps, frame %.1f ms (max %.1f) | idle in xrWaitFrame %.1f | stereo render cpu %.1f (max %.1f) | %s | eye %dx%d",
+			1000.0 * frames / sumInterval, sumInterval / frames, maxInterval, sumWait / frames, sumCpu / frames, maxCpu, gpu, eyeW, eyeH );
+		frames = gpuSamples = 0;
+		sumInterval = maxInterval = sumWait = sumCpu = maxCpu = sumGpu = maxGpu = 0.0;
+		lastReport = now;
+	}
+
+private:
+	typedef std::chrono::steady_clock Clock;
+	static double Ms( Clock::duration d ) {
+		return std::chrono::duration<double, std::milli>( d ).count();
+	}
+	void PollGpu() {
+		for ( int i = 0; i < NUM_QUERIES; ++i ) {
+			if ( !pending[i] ) {
+				continue;
+			}
+			GLuint available = 0;
+			glGetQueryObjectuivEXT( queries[i], GL_QUERY_RESULT_AVAILABLE, &available );
+			if ( !available ) {
+				continue;
+			}
+			uint64_t ns = 0;
+			glGetQueryObjectui64vEXT( queries[i], GL_QUERY_RESULT, &ns );
+			pending[i] = false;
+			GLint disjoint = 0;
+			qglGetIntegerv( GL_GPU_DISJOINT_EXT, &disjoint );
+			if ( !disjoint ) {
+				const double ms = (double)ns / 1.0e6;
+				sumGpu += ms;
+				maxGpu = ms > maxGpu ? ms : maxGpu;
+				++gpuSamples;
+			}
+		}
+	}
+
+	static const int NUM_QUERIES = 4;
+	void ( *glGenQueriesEXT )( GLsizei, GLuint * ) = nullptr;
+	void ( *glDeleteQueriesEXT )( GLsizei, const GLuint * ) = nullptr;
+	void ( *glBeginQueryEXT )( GLenum, GLuint ) = nullptr;
+	void ( *glEndQueryEXT )( GLenum ) = nullptr;
+	void ( *glGetQueryObjectuivEXT )( GLuint, GLenum, GLuint * ) = nullptr;
+	void ( *glGetQueryObjectui64vEXT )( GLuint, GLenum, uint64_t * ) = nullptr;
+	bool gpuOk = false;
+	GLuint queries[NUM_QUERIES] = {};
+	bool pending[NUM_QUERIES] = {};
+	int current = -1;
+	int nextQuery = 0;
+
+	bool haveLastFrame = false;
+	Clock::time_point lastFrame, lastReport;
+	int frames = 0, gpuSamples = 0;
+	double sumInterval = 0, maxInterval = 0, sumWait = 0, sumCpu = 0, maxCpu = 0, sumGpu = 0, maxGpu = 0;
+};
+
 /*
 =============================================================================================
 Implementation
@@ -164,6 +302,7 @@ struct OpenXRBackend::Impl {
 	bool menuAnchored = false;
 	XrPosef menuPose;
 
+	FrameTimer timer;
 	OpenXRInput input;
 	std::mutex inputMutex;
 	vrControllerState_t controllerState;	// polled once per frame by the render thread, read by the game thread
@@ -406,7 +545,7 @@ bool OpenXRBackend::Impl::CreateSwapchains() {
 	XR_Log( "recommended eye resolution: %ux%u (max %ux%u)", views[0].recommendedImageRectWidth, views[0].recommendedImageRectHeight,
 		views[0].maxImageRectWidth, views[0].maxImageRectHeight );
 
-	const float scale = vr_renderScale.GetFloat();
+	const float scale = vr_resolutionScale.GetFloat();
 	eyeWidth = idMath::Imin( (int)( views[0].recommendedImageRectWidth * scale ) & ~1, (int)views[0].maxImageRectWidth );
 	eyeHeight = idMath::Imin( (int)( views[0].recommendedImageRectHeight * scale ) & ~1, (int)views[0].maxImageRectHeight );
 	if ( eyeWidth < 256 || eyeHeight < 256 ) {
@@ -435,6 +574,7 @@ bool OpenXRBackend::Impl::Initialize() {
 		return false;
 	}
 	input.Init( instance, session );
+	timer.Init();
 
 	// The GUI is drawn at 640x480 virtual pixels and has no aspect ratio fixup: it fills the whole overlay, which is 4:3.
 	// Scissors computed by the frontend are valid for the combined view only and are of no use for the individual eyes.
@@ -447,6 +587,7 @@ bool OpenXRBackend::Impl::Initialize() {
 }
 
 void OpenXRBackend::Impl::Shutdown() {
+	timer.Shutdown();
 	input.Destroy();
 	eyeSwapchains[0].Destroy();
 	eyeSwapchains[1].Destroy();
@@ -479,12 +620,12 @@ Session
 =============================================================================================
 */
 void OpenXRBackend::Impl::OnSessionBegun() {
-	if ( vr_refreshRate.GetInteger() > 0 && hasRefreshRate && pfnRequestRefreshRate && pfnEnumerateRefreshRates ) {
+	if ( vr_displayRefreshRate.GetInteger() > 0 && hasRefreshRate && pfnRequestRefreshRate && pfnEnumerateRefreshRates ) {
 		uint32_t count = 0;
 		pfnEnumerateRefreshRates( session, 0, &count, nullptr );
 		std::vector<float> rates( count );
 		if ( count > 0 && XR_SUCCEEDED( pfnEnumerateRefreshRates( session, count, &count, rates.data() ) ) ) {
-			const float wantedRate = (float)vr_refreshRate.GetInteger();
+			const float wantedRate = (float)vr_displayRefreshRate.GetInteger();
 			bool supported = false;
 			for ( float r : rates ) {
 				supported = supported || fabsf( r - wantedRate ) < 0.5f;
@@ -620,9 +761,11 @@ bool OpenXRBackend::Impl::BeginFrame() {
 
 	XrFrameWaitInfo waitInfo = { XR_TYPE_FRAME_WAIT_INFO };
 	XrFrameState frameState = { XR_TYPE_FRAME_STATE };
+	const std::chrono::steady_clock::time_point waitStart = std::chrono::steady_clock::now();
 	if ( !XR_Check( xrWaitFrame( session, &waitInfo, &frameState ), "waiting for the next frame", instance ) ) {
 		return false;
 	}
+	timer.OnFrameStart( std::chrono::duration<double, std::milli>( std::chrono::steady_clock::now() - waitStart ).count() );
 	predictedDisplayTime = frameState.predictedDisplayTime;
 	displayPeriod = frameState.predictedDisplayPeriod > 0 ? frameState.predictedDisplayPeriod : 13888889;	// fall back to 72 Hz
 	shouldRender = frameState.shouldRender != XR_FALSE;
@@ -958,6 +1101,7 @@ void OpenXRBackend::Impl::RenderFrame( const frameData_t *fd ) {
 		return;
 	}
 
+	const std::chrono::steady_clock::time_point cpuStart = std::chrono::steady_clock::now();
 	bool rendered = false;
 	const bool hasWorldView = FrameHasWorldView( fd ) && !fd->render2D;
 
@@ -966,10 +1110,13 @@ void OpenXRBackend::Impl::RenderFrame( const frameData_t *fd ) {
 		FrameBuffer *realDefault = frameBuffers->defaultFbo;
 
 		try {
+			timer.BeginGpu();
 			ExecutePass( fd, PASS_LEFT, eyeSwapchains[0].CurrentFrameBuffer() );
 			ExecutePass( fd, PASS_RIGHT, eyeSwapchains[1].CurrentFrameBuffer() );
 			ExecutePass( fd, PASS_UI, uiSwapchain.CurrentFrameBuffer() );
+			timer.EndGpu();
 		} catch ( ... ) {
+			timer.EndGpu();
 			// the engine reports errors with exceptions: leave everything in a state that lets the next frame start cleanly
 			frameBuffers->defaultFbo = realDefault;
 			frameBuffers->currentRenderFbo = realDefault;
@@ -986,6 +1133,7 @@ void OpenXRBackend::Impl::RenderFrame( const frameData_t *fd ) {
 
 		qglFlush();
 		rendered = true;
+		timer.OnFrameEnd( std::chrono::duration<double, std::milli>( std::chrono::steady_clock::now() - cpuStart ).count(), eyeWidth, eyeHeight );
 
 		// heartbeat: roughly every 10 seconds, to see in the log that the headset is tracked and the frames keep flowing
 		static int frameCounter = 0;
