@@ -55,9 +55,9 @@ extern void GLimp_GetEGLHandles( void **display, void **config, void **context )
 bool RB_Bloom( bloomCommand_t *cmd );
 void RB_CopyRender( const void *data );
 
-idCVar vr_renderScale( "vr_renderScale", "1.0", CVAR_RENDERER | CVAR_FLOAT | CVAR_ARCHIVE,
+idCVar vr_renderScale( "vr_renderScale", "1.0", CVAR_RENDERER | CVAR_FLOAT,
 	"Resolution of the eye buffers relative to the headset's recommended resolution (takes effect on restart)", 0.25f, 2.0f );
-idCVar vr_refreshRate( "vr_refreshRate", "0", CVAR_RENDERER | CVAR_INTEGER | CVAR_ARCHIVE,
+idCVar vr_refreshRate( "vr_refreshRate", "0", CVAR_RENDERER | CVAR_INTEGER,
 	"Display refresh rate to request from the headset, e.g. 72, 80, 90 or 120 on Quest. 0 = don't ask, keep the headset's setting (takes effect on restart)" );
 idCVar vr_uiOverlayHeight( "vr_uiOverlayHeight", "1.8", CVAR_RENDERER | CVAR_FLOAT | CVAR_ARCHIVE,
 	"Height of the HUD/menu screen in metres" );
