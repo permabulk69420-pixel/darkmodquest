@@ -156,6 +156,8 @@ struct OpenXRBackend::Impl {
 
 	OpenXRInput input;
 	std::mutex inputMutex;
+	vrControllerState_t controllerState;	// polled once per frame by the render thread, read by the game thread
+	bool controllerStateValid = false;
 
 	// extension functions and availability
 	bool hasRefreshRate = false;
@@ -548,11 +550,16 @@ void OpenXRBackend::Impl::HandleEvents() {
 }
 
 // If the game data does not come with gamepad bindings, give the controllers a useful default layout.
+// The menu button is always made sure to work, there is no keyboard to press Escape on.
 void OpenXRBackend::Impl::ApplyFallbackPadBindings() {
 	if ( padBindingsChecked || !common->IsInitialized() ) {
 		return;
 	}
 	padBindingsChecked = true;
+
+	if ( !idGamepadInput::IsButtonBound( PAD_START ) ) {
+		cmdSystem->BufferCommandText( CMD_EXEC_NOW, "bindPadButton PRESS PAD_START escape\n" );
+	}
 	if ( idGamepadInput::HasAnyBinding() ) {
 		return;
 	}
@@ -568,9 +575,6 @@ void OpenXRBackend::Impl::ApplyFallbackPadBindings() {
 		{ "PAD_R1", "_lean_right" },
 		{ "PAD_L3", "_speed" },
 		{ "PAD_R3", "_creep" },
-		{ "PAD_UP", "_inventory_prev" },
-		{ "PAD_DOWN", "_inventory_next" },
-		{ "PAD_START", "escape" },	// opens the main menu
 	};
 	for ( const auto &b : binds ) {
 		cmdSystem->BufferCommandText( CMD_EXEC_NOW, va( "bindPadButton PRESS %s %s\n", b[0], b[1] ) );
@@ -831,12 +835,23 @@ void OpenXRBackend::Impl::ExecutePass( const frameData_t *fd, Pass pass, FrameBu
 	const bool drawUI = !isEye;
 	const bool drawLightgem = ( pass == PASS_LEFT ) || ( pass == PASS_UI && fd->render2D );
 
+	// Scissor rectangles and depth bounds computed by the frontend are only valid for the combined view, not for
+	// the individual eyes. (Other code, e.g. the r_lockView handling, may switch them back on.)
+	if ( r_useScissor.GetBool() ) {
+		r_useScissor.SetBool( false );
+	}
+	if ( r_useDepthBoundsTest.GetBool() ) {
+		r_useDepthBoundsTest.SetBool( false );
+	}
+
 	// render this pass into the swapchain image instead of the window
 	frameBuffers->defaultFbo = target;
 	frameBuffers->currentRenderFbo = target;
 	target->Bind();
 	frameBuffers->tonemapNotYet = drawWorld && r_tonemap.GetBool();
 
+	// start from a clean state (color mask, blending, ...), the previous pass may have left anything behind
+	RB_SetDefaultGLState();
 	GL_ViewportRelative( 0, 0, 1, 1 );
 	GL_ScissorRelative( 0, 0, 1, 1 );
 	if ( isEye ) {
@@ -849,8 +864,6 @@ void OpenXRBackend::Impl::ExecutePass( const frameData_t *fd, Pass pass, FrameBu
 	if ( isEye ) {
 		UpdateViewsForEye( fd->cmdHead, pass );
 	}
-
-	RB_SetDefaultGLState();
 
 	// true: views are drawn into the primary framebuffer (which can be multisampled)
 	// false: the main rendering is done and we are drawing straight into the target
@@ -952,6 +965,14 @@ void OpenXRBackend::Impl::RenderFrame( const frameData_t *fd ) {
 
 		qglFlush();
 		rendered = true;
+
+		static bool loggedFirstFrame = false;
+		if ( !loggedFirstFrame ) {
+			loggedFirstFrame = true;
+			XR_Log( "first stereo frame submitted (%dx%d per eye, fov left %.0f/%.0f/%.0f/%.0f deg)", eyeWidth, eyeHeight,
+				RAD2DEG( renderViews[0].fov.angleLeft ), RAD2DEG( renderViews[0].fov.angleRight ),
+				RAD2DEG( renderViews[0].fov.angleUp ), RAD2DEG( renderViews[0].fov.angleDown ) );
+		}
 	}
 
 	eyeSwapchains[0].Release();
@@ -966,9 +987,17 @@ Public interface
 =============================================================================================
 */
 void OpenXRBackend::Init() {
-	if ( impl->initialized || !Sys_VR_IsRequested() ) {
+	if ( impl->initialized ) {
 		return;
 	}
+	if ( !Sys_VR_IsRequested() ) {
+		XR_Log( "not started as a VR app, running flat" );
+		return;
+	}
+	void *display = nullptr, *config = nullptr, *context = nullptr;
+	GLimp_GetEGLHandles( &display, &config, &context );
+	XR_Log( "started as a VR app (JavaVM %p, activity %p, EGL display %p config %p context %p)",
+		Sys_VR_GetJavaVM(), Sys_VR_GetActivity(), display, config, context );
 	if ( !impl->Initialize() ) {
 		XR_Log( "VR initialization failed, continuing without VR" );
 	}
@@ -990,6 +1019,16 @@ void OpenXRBackend::PrepareFrame() {
 	}
 	impl->HandleEvents();
 	impl->ApplyFallbackPadBindings();
+
+	{
+		// all OpenXR calls are made from this thread: poll the controllers now and hand out the result to the game thread
+		vrControllerState_t state;
+		memset( &state, 0, sizeof( state ) );
+		const bool valid = impl->sessionRunning && impl->input.Poll( impl->session, state );
+		std::lock_guard<std::mutex> lock( impl->inputMutex );
+		impl->controllerState = state;
+		impl->controllerStateValid = valid;
+	}
 
 	if ( !impl->sessionRunning || impl->predictedDisplayTime == 0 ) {
 		return;
@@ -1084,7 +1123,8 @@ bool OpenXRBackend::PollControllers( vrControllerState_t &state ) {
 		return false;
 	}
 	std::lock_guard<std::mutex> lock( impl->inputMutex );
-	return impl->input.Poll( impl->session, state );
+	state = impl->controllerState;
+	return impl->controllerStateValid;
 }
 
 #else // !TDM_VR_OPENXR

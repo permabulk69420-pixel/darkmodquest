@@ -78,6 +78,25 @@
         android:hardwareAccelerated="true"
         android:usesCleartextTraffic="true"
         tools:ignore="HardcodedDebugMode,UnusedAttribute">
+        <!-- The Dark Mod in VR for Meta Quest: gets its own launcher entry, marked as an immersive (VR) activity.
+             It is declared before the normal launcher so that it is the app's default entry on a Quest. On other devices it just
+             starts the game the usual way. -->
+        <meta-data android:name="com.oculus.supportedDevices" android:value="quest2|quest3|quest3s|questpro" />
+        <activity android:label="The Dark Mod VR"
+            android:screenOrientation="landscape"
+            android:launchMode="singleTask"
+            android:exported="true"
+            android:resizeableActivity="false"
+            android:excludeFromRecents="false"
+            android:name="com.n0n3m4.q3e.Q3EVRMain"
+            android:configChanges="density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="com.oculus.intent.category.VR" />
+                <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HEADSET" />
+            </intent-filter>
+        </activity>
         <activity            
             android:name="com.n0n3m4.DIII4A.GameLauncher"
             android:label="@string/app_name"
@@ -98,23 +117,7 @@
             android:name="com.n0n3m4.q3e.Q3EMain"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize">
         </activity>   
-        <!-- The Dark Mod in VR for Meta Quest: gets its own launcher entry, marked as an immersive (VR) activity -->
-        <meta-data android:name="com.oculus.supportedDevices" android:value="quest2|quest3|quest3s|questpro" />
-        <activity android:label="The Dark Mod VR"
-            android:screenOrientation="landscape"
-            android:launchMode="singleTask"
-            android:exported="true"
-            android:resizeableActivity="false"
-            android:excludeFromRecents="false"
-            android:name="com.n0n3m4.q3e.Q3EVRMain"
-            android:configChanges="density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-                <category android:name="com.oculus.intent.category.VR" />
-                <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HEADSET" />
-            </intent-filter>
-        </activity>
+
         <activity android:label="@string/app_name"
             android:screenOrientation="landscape"
             android:launchMode="singleTask"

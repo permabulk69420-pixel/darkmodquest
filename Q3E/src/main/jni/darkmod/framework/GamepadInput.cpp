@@ -225,6 +225,21 @@ void idGamepadInput::UnbindAll() {
 	wasModifiedAfterLastWrite = true;
 }
 
+bool idGamepadInput::IsButtonBound( int button ) {
+	if ( button < 0 || button >= PAD_NUM_BUTTONS ) {
+		return false;
+	}
+	if ( button == modifierButton ) {
+		return true;
+	}
+	for ( int j = 0; j < BIND_NUM; ++j ) {
+		if ( buttonState[button].bindings[j].action != -1 ) {
+			return true;
+		}
+	}
+	return false;
+}
+
 bool idGamepadInput::HasAnyBinding() {
 	for ( int i = 0; i < PAD_NUM_BUTTONS; ++i ) {
 		for ( int j = 0; j < BIND_NUM; ++j ) {

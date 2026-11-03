@@ -64,6 +64,7 @@ public:
 	static void UnbindAll();
 	static void SetBinding( int button, int type, const idStr &binding );
 	static bool HasAnyBinding();
+	static bool IsButtonBound( int button );
 
 	static void SetButtonState( int button, bool pressed );
 	static void SetAxisState( int axis, int value );
