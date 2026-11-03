@@ -105,6 +105,12 @@
         android:entries="@array/vr_hud_offset_labels" />
 
     <CheckBox
+        android:id="@+id/vr_show_perf"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/vr_show_perf_label" />
+
+    <CheckBox
         android:id="@+id/vr_srgb"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"

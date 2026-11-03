@@ -6,6 +6,7 @@
     <string name="vr_foveation_label" translatable="false">Foveated rendering (less detail towards the edges, faster)</string>
     <string name="vr_refresh_rate_label" translatable="false">Display refresh rate</string>
     <string name="vr_srgb_label" translatable="false">sRGB colour format (try it if the colours look wrong)</string>
+    <string name="vr_show_perf_label" translatable="false">Show performance info on the HUD (fps, CPU and GPU time per frame)</string>
     <string name="vr_hud_height_label" translatable="false">HUD / menu screen size</string>
     <string name="vr_hud_distance_label" translatable="false">HUD / menu screen distance</string>
     <string name="vr_hud_offset_label" translatable="false">HUD / menu screen height offset</string>

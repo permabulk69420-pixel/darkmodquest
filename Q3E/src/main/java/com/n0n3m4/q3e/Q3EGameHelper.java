@@ -485,6 +485,8 @@ class Q3EGameHelper
             command.SetProp("vr_displayRefreshRate", String.valueOf(preferences.getInt(Q3EPreference.pref_vr_refresh_rate, 0)));
         if(preferences.contains(Q3EPreference.pref_vr_srgb))
             command.SetProp("vr_srgbSwapchain", preferences.getBoolean(Q3EPreference.pref_vr_srgb, false) ? "1" : "0");
+        if(preferences.contains(Q3EPreference.pref_vr_show_perf))
+            command.SetProp("vr_showPerf", preferences.getBoolean(Q3EPreference.pref_vr_show_perf, false) ? "1" : "0");
         if(preferences.contains(Q3EPreference.pref_vr_hud_height))
             command.SetProp("vr_uiOverlayHeight", String.valueOf(preferences.getInt(Q3EPreference.pref_vr_hud_height, 180) / 100.0f));
         if(preferences.contains(Q3EPreference.pref_vr_hud_distance))

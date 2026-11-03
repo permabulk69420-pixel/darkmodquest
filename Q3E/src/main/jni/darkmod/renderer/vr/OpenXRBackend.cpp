@@ -64,6 +64,8 @@ idCVar vr_srgbSwapchain( "vr_srgbSwapchain", "0", CVAR_RENDERER | CVAR_INTEGER,
 idCVar vr_foveation( "vr_foveation", "0", CVAR_RENDERER | CVAR_INTEGER,
 	"Fixed foveated rendering: the scene is drawn at full detail in the middle of each eye and with less detail towards the edges, "
 	"which makes it cheaper. 0 = off (default), 1 = low, 2 = medium, 3 = high (the most savings). Takes effect on restart, not saved: set it on the command line", 0, 3 );
+idCVar vr_showPerf( "vr_showPerf", "0", CVAR_RENDERER | CVAR_BOOL,
+	"Show the frame rate and the CPU and GPU time per frame on the HUD screen (not saved: set it in the launcher)" );
 idCVar vr_displayRefreshRate( "vr_displayRefreshRate", "0", CVAR_RENDERER | CVAR_INTEGER,
 	"Display refresh rate to request from the headset, e.g. 72, 80, 90 or 120 on Quest. 0 = don't ask, keep the headset's setting (takes effect on restart, not saved: set it on the command line)" );
 idCVar vr_uiOverlayHeight( "vr_uiOverlayHeight", "1.8", CVAR_RENDERER | CVAR_FLOAT | CVAR_ARCHIVE,
@@ -236,6 +238,15 @@ public:
 			current = -1;
 		}
 	}
+	// the latest report, for the on-screen display
+	bool GetText( char *buffer, int size ) const {
+		std::lock_guard<std::mutex> lock( textMutex );
+		if ( !text[0] ) {
+			return false;
+		}
+		idStr::Copynz( buffer, text, size );
+		return true;
+	}
 	// called after the frame was submitted; cpuMs is the time spent in the stereo rendering code
 	void OnFrameEnd( double cpuMs, int eyeW, int eyeH ) {
 		sumCpu += cpuMs;
@@ -248,6 +259,16 @@ public:
 		char gpu[64] = "gpu n/a";
 		if ( gpuSamples > 0 ) {
 			snprintf( gpu, sizeof( gpu ), "gpu %.1f (max %.1f)", sumGpu / gpuSamples, maxGpu );
+		}
+		{
+			std::lock_guard<std::mutex> lock( textMutex );
+			if ( gpuSamples > 0 ) {
+				snprintf( text, sizeof( text ), "%.0f fps  frame %.1f ms  CPU %.1f (max %.1f)  GPU %.1f (max %.1f)",
+					1000.0 * frames / sumInterval, sumInterval / frames, sumCpu / frames, maxCpu, sumGpu / gpuSamples, maxGpu );
+			} else {
+				snprintf( text, sizeof( text ), "%.0f fps  frame %.1f ms  CPU %.1f (max %.1f)  GPU n/a",
+					1000.0 * frames / sumInterval, sumInterval / frames, sumCpu / frames, maxCpu );
+			}
 		}
 		XR_Log( "perf: %.1f fps, frame %.1f ms (max %.1f) | idle in xrWaitFrame %.1f | stereo render cpu %.1f (max %.1f) | %s | eye %dx%d",
 			1000.0 * frames / sumInterval, sumInterval / frames, maxInterval, sumWait / frames, sumCpu / frames, maxCpu, gpu, eyeW, eyeH );
@@ -298,6 +319,8 @@ private:
 	int current = -1;
 	int nextQuery = 0;
 
+	mutable std::mutex textMutex;
+	char text[160] = "";
 	bool haveLastFrame = false;
 	Clock::time_point lastFrame, lastReport;
 	int frames = 0, gpuSamples = 0;
@@ -1270,6 +1293,13 @@ void OpenXRBackend::Impl::ApplyFoveation( int eye ) {
 	textureFoveationParameters( foveatedTexture, 0, 0, focalX, focalY, level.gain, level.gain, level.area );
 }
 
+bool OpenXRBackend::GetPerfText( char *buffer, int size ) const {
+	if ( !impl->initialized || !vr_showPerf.GetBool() ) {
+		return false;
+	}
+	return impl->timer.GetText( buffer, size );
+}
+
 idImage *OpenXRBackend::CreateFoveatedColorImage( int width, int height ) {
 	Impl &i = *impl;
 	if ( !i.initialized || vr_foveation.GetInteger() <= 0 ) {
@@ -1490,6 +1520,7 @@ void OpenXRBackend::RenderStereoView( const struct frameData_s * ) {}
 bool OpenXRBackend::GetHeadOrientation( idQuat & ) const { return false; }
 bool OpenXRBackend::PollControllers( vrControllerState_t &state ) { memset( &state, 0, sizeof( state ) ); return false; }
 idImage *OpenXRBackend::CreateFoveatedColorImage( int, int ) { return nullptr; }
+bool OpenXRBackend::GetPerfText( char *, int ) const { return false; }
 void OpenXRBackend::CheckFoveatedFramebuffer() {}
 
 #endif // TDM_VR_OPENXR

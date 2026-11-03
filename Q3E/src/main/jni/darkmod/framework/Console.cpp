@@ -14,6 +14,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 ******************************************************************************/
 
 #include "precompiled.h"
+#include "renderer/vr/OpenXRBackend.h"
 #pragma hdrstop
 
 
@@ -1248,6 +1249,14 @@ void idConsoleLocal::Draw( bool forceFullScreen ) {
 
 	if ( com_showFPS.GetBool() ) {
 		y = SCR_DrawFPS( 4 ); // Initial padding from the top of the screen.
+	}
+
+	{
+		// VR: frame times (vr_showPerf)
+		char perf[160];
+		if ( vrBackend->GetPerfText( perf, sizeof( perf ) ) ) {
+			SCR_DrawTextRightAlign( y, "%s", perf );
+		}
 	}
 
 	if ( com_showMemoryUsage.GetBool() ) {
