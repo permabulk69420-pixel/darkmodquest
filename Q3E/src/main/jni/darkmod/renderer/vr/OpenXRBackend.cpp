@@ -965,9 +965,20 @@ void OpenXRBackend::Impl::RenderFrame( const frameData_t *fd ) {
 		 eyeSwapchains[0].Acquire() && eyeSwapchains[1].Acquire() && uiSwapchain.Acquire() ) {
 		FrameBuffer *realDefault = frameBuffers->defaultFbo;
 
-		ExecutePass( fd, PASS_LEFT, eyeSwapchains[0].CurrentFrameBuffer() );
-		ExecutePass( fd, PASS_RIGHT, eyeSwapchains[1].CurrentFrameBuffer() );
-		ExecutePass( fd, PASS_UI, uiSwapchain.CurrentFrameBuffer() );
+		try {
+			ExecutePass( fd, PASS_LEFT, eyeSwapchains[0].CurrentFrameBuffer() );
+			ExecutePass( fd, PASS_RIGHT, eyeSwapchains[1].CurrentFrameBuffer() );
+			ExecutePass( fd, PASS_UI, uiSwapchain.CurrentFrameBuffer() );
+		} catch ( ... ) {
+			// the engine reports errors with exceptions: leave everything in a state that lets the next frame start cleanly
+			frameBuffers->defaultFbo = realDefault;
+			frameBuffers->currentRenderFbo = realDefault;
+			eyeSwapchains[0].Release();
+			eyeSwapchains[1].Release();
+			uiSwapchain.Release();
+			EndFrame( false, false );
+			throw;
+		}
 
 		frameBuffers->defaultFbo = realDefault;
 		frameBuffers->currentRenderFbo = realDefault;
@@ -975,6 +986,13 @@ void OpenXRBackend::Impl::RenderFrame( const frameData_t *fd ) {
 
 		qglFlush();
 		rendered = true;
+
+		// heartbeat: roughly every 10 seconds, to see in the log that the headset is tracked and the frames keep flowing
+		static int frameCounter = 0;
+		if ( ++frameCounter % 720 == 0 ) {
+			const XrPosef &p = renderViews[0].pose;
+			XR_Log( "frame %d, head at %.2f %.2f %.2f m, session state %d", frameCounter, p.position.x, p.position.y, p.position.z, (int)sessionState );
+		}
 
 		static bool loggedFirstFrame = false;
 		if ( !loggedFirstFrame ) {

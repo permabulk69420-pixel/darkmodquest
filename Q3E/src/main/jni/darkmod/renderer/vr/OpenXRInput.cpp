@@ -215,6 +215,22 @@ bool OpenXRInput::Poll( XrSession session, vrControllerState_t &state ) {
 	GetFloat( session, rightTrigger, f );	state.buttons[PAD_R2] = HysteresisButton( PAD_R2, f, 0.6f, 0.3f );
 	GetFloat( session, leftSqueeze, f );	state.buttons[PAD_L1] = HysteresisButton( PAD_L1, f, 0.7f, 0.4f );
 	GetFloat( session, rightSqueeze, f );	state.buttons[PAD_R1] = HysteresisButton( PAD_R1, f, 0.7f, 0.4f );
+
+	// diagnostics: report the first button changes in the log (helps to check the controller mapping on a headset)
+	static bool announced = false;
+	static int reported = 0;
+	static bool lastReported[vrControllerState_t::MAX_BUTTONS] = {};
+	if ( !announced ) {
+		announced = true;
+		XR_Log( "controller input is active" );
+	}
+	for ( int i = 0; i < PAD_NUM_BUTTONS && reported < 100; ++i ) {
+		if ( state.buttons[i] != lastReported[i] ) {
+			lastReported[i] = state.buttons[i];
+			++reported;
+			XR_Log( "pad button %s %s", idGamepadInput::ButtonToString( i ).c_str(), state.buttons[i] ? "pressed" : "released" );
+		}
+	}
 	return true;
 }
 
