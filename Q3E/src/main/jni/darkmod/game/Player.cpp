@@ -6942,7 +6942,7 @@ void idPlayer::Move( void )
 	}
 
 	physicsObj.SetDebugLevel( g_debugMove.GetBool() );
-	physicsObj.SetPlayerInput( usercmd, vrBodyValid ? vrBodyAngles : viewAngles );
+	physicsObj.SetPlayerInput( usercmd, viewAngles ); // VR: viewAngles is where the player looks, so the stick moves relative to the headset
 
 	// FIXME: physics gets disabled somehow
 	BecomeActive( TH_PHYSICS );
