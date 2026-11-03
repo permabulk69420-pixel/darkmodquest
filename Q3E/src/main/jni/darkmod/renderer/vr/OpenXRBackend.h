@@ -20,6 +20,7 @@
 
 struct renderView_s;
 struct frameData_s;
+class idImage;
 
 /*
 State of the Touch controllers, laid out like a standard gamepad.
@@ -62,6 +63,12 @@ public:
 	// Predicted orientation of the head relative to the tracking space, in idTech axes.
 	// Returns false if there is no valid head pose.
 	bool GetHeadOrientation( idQuat &orientation ) const;
+
+	// Fixed foveated rendering (vr_foveation): the buffer the scene is drawn into has to be a texture that the GPU
+	// can foveate. Returns nullptr when foveation is not used; then the engine uses its normal buffer.
+	idImage *CreateFoveatedColorImage( int width, int height );
+	// to be called with that buffer's framebuffer bound; switches foveation off again if the GPU does not accept it
+	void CheckFoveatedFramebuffer();
 
 	// Reads the current state of the controllers. Returns false if input is not available.
 	bool PollControllers( vrControllerState_t &state );

@@ -18,6 +18,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #include "renderer/tr_local.h"
 #include "renderer/backend/FrameBufferManager.h"
 #include "renderer/backend/FrameBuffer.h"
+#include "renderer/vr/OpenXRBackend.h"
 
 FrameBufferManager frameBuffersImpl;
 FrameBufferManager *frameBuffers = &frameBuffersImpl;
@@ -276,8 +277,17 @@ void FrameBufferManager::UpdateResolutionAndFormats() {
 void FrameBufferManager::CreatePrimary( FrameBuffer *primary ) {
 	int msaa = r_multiSamples.GetInteger();
 	primary->Init( renderWidth, renderHeight, msaa );	
-	primary->AddColorRenderBuffer( 0, colorFormat );
+	// VR with foveated rendering: the scene goes into a texture that the GPU can foveate
+	idImage *foveatedColor = vrBackend->CreateFoveatedColorImage( renderWidth, renderHeight );
+	if ( foveatedColor ) {
+		primary->AddColorRenderTexture( 0, foveatedColor );
+	} else {
+		primary->AddColorRenderBuffer( 0, colorFormat );
+	}
 	primary->AddDepthStencilRenderBuffer( depthStencilFormat );
+	if ( foveatedColor ) {
+		vrBackend->CheckFoveatedFramebuffer();
+	}
 }
 
 void FrameBufferManager::CreateResolve( FrameBuffer *resolve ) {
