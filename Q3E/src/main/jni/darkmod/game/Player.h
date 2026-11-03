@@ -276,6 +276,7 @@ public:
 	// the game uses for aiming, frobbing and so on. Movement and the base of the rendered view use the body.
 	idAngles				vrBodyAngles;
 	bool					vrBodyValid;
+	float					vrHeadYaw;			// yaw of the headset relative to the body, degrees (movement follows it)
 
 	int						buttonMask;
 	int						oldButtons;

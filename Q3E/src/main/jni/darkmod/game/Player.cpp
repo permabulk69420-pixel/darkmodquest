@@ -527,6 +527,7 @@ idPlayer::idPlayer() :
 	cmdAngles				= ang_zero;
 	vrBodyAngles			= ang_zero;
 	vrBodyValid				= false;
+	vrHeadYaw				= 0.0f;
 
 	oldButtons				= 0;
 	buttonMask				= 0;
@@ -5236,6 +5237,11 @@ void idPlayer::UpdateViewAngles( void )
 		if ( vrBackend->GetHeadOrientation( head ) ) {
 			vrBodyAngles = idAngles( 0.0f, viewAngles.yaw, 0.0f );
 			vrBodyValid = true;
+			// which way the headset points, seen from above (keeps the last value while looking straight up or down)
+			const idVec3 headForward = head.ToMat3()[0];
+			if ( headForward.x * headForward.x + headForward.y * headForward.y > 0.05f ) {
+				vrHeadYaw = RAD2DEG( idMath::ATan( headForward.y, headForward.x ) );
+			}
 			const idMat3 gaze = head.ToMat3() * vrBodyAngles.ToMat3();
 			idAngles gazeAngles = gaze.ToAngles();
 			gazeAngles.roll = 0.0f;
@@ -6942,7 +6948,18 @@ void idPlayer::Move( void )
 	}
 
 	physicsObj.SetDebugLevel( g_debugMove.GetBool() );
-	physicsObj.SetPlayerInput( usercmd, viewAngles ); // VR: viewAngles is where the player looks, so the stick moves relative to the headset
+	// VR: the stick moves relative to the headset. The physics keeps working with the angles of the body (it hands them
+	// back to the player when mantling, climbing and so on), so the stick input is turned by the head's yaw instead.
+	usercmd_t moveCmd = usercmd;
+	if ( vrBodyValid ) {
+		float s, c;
+		idMath::SinCos( DEG2RAD( vrHeadYaw ), s, c );
+		auto Round = []( float v ) { return (int)( v >= 0.0f ? v + 0.5f : v - 0.5f ); };
+		const float forward = usercmd.forwardmove, right = usercmd.rightmove;
+		moveCmd.forwardmove = (signed char)idMath::ClampInt( -127, 127, Round( forward * c + right * s ) );
+		moveCmd.rightmove = (signed char)idMath::ClampInt( -127, 127, Round( right * c - forward * s ) );
+	}
+	physicsObj.SetPlayerInput( moveCmd, vrBodyValid ? vrBodyAngles : viewAngles );
 
 	// FIXME: physics gets disabled somehow
 	BecomeActive( TH_PHYSICS );

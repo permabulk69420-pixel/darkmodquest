@@ -350,6 +350,8 @@ struct OpenXRBackend::Impl {
 	// HUD placement
 	bool menuAnchored = false;
 	XrPosef menuPose;
+	bool recenterPending = false;		// the headset's centre was reset: the menu screen is put in front of the player again
+	XrTime recenterTime = 0;
 
 	FrameTimer timer;
 	OpenXRInput input;
@@ -755,6 +757,15 @@ void OpenXRBackend::Impl::HandleEvents() {
 		case XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED:
 			OnSessionStateChanged( *reinterpret_cast<XrEventDataSessionStateChanged *>( &event ) );
 			break;
+		case XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING: {
+			const XrEventDataReferenceSpaceChangePending &change = *reinterpret_cast<XrEventDataReferenceSpaceChangePending *>( &event );
+			if ( change.referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL ) {
+				XR_Log( "the headset was recentered" );
+				recenterPending = true;
+				recenterTime = change.changeTime;
+			}
+			break;
+		}
 		case XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING:
 			XR_Log( "instance loss pending" );
 			cmdSystem->BufferCommandText( CMD_EXEC_APPEND, "quit\n" );
@@ -883,12 +894,18 @@ void OpenXRBackend::Impl::EndFrame( bool submitLayers, bool hasWorldView ) {
 		uiLayer.size.width = height * ( (float)UI_WIDTH / (float)UI_HEIGHT );
 		if ( hasWorldView ) {
 			menuAnchored = false;
+			recenterPending = false;
 			uiLayer.space = viewSpace;
 			uiLayer.pose.orientation.w = 1.0f;
 			uiLayer.pose.position.x = 0.0f;
 			uiLayer.pose.position.y = vr_uiOverlayVerticalOffset.GetFloat();
 			uiLayer.pose.position.z = -vr_uiOverlayDistance.GetFloat();
 		} else {
+			// the screen is fixed in space; after a recenter that is not where the player is looking any more
+			if ( recenterPending && predictedDisplayTime >= recenterTime ) {
+				recenterPending = false;
+				menuAnchored = false;
+			}
 			if ( !menuAnchored ) {
 				// place the screen in front of wherever the player is looking right now, level with the horizon
 				const XrPosef &p = renderViews[0].pose;
