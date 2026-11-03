@@ -58,6 +58,9 @@ void RB_CopyRender( const void *data );
 
 idCVar vr_resolutionScale( "vr_resolutionScale", "1.0", CVAR_RENDERER | CVAR_FLOAT,
 	"Resolution of the eye buffers relative to the headset's recommended resolution, 1.0 = 100% (takes effect on restart, not saved: set it on the command line)", 0.25f, 2.0f );
+idCVar vr_srgbSwapchain( "vr_srgbSwapchain", "1", CVAR_RENDERER | CVAR_INTEGER,
+	"1 = give the headset an sRGB image format and store the engine's (already display-encoded) colours in it unchanged, 0 = plain RGBA8 format. "
+	"Try 0 and 1 if the colours look washed out or too dark (takes effect on restart, not saved: set it on the command line)", 0, 1 );
 idCVar vr_displayRefreshRate( "vr_displayRefreshRate", "0", CVAR_RENDERER | CVAR_INTEGER,
 	"Display refresh rate to request from the headset, e.g. 72, 80, 90 or 120 on Quest. 0 = don't ask, keep the headset's setting (takes effect on restart, not saved: set it on the command line)" );
 idCVar vr_uiOverlayHeight( "vr_uiOverlayHeight", "1.8", CVAR_RENDERER | CVAR_FLOAT | CVAR_ARCHIVE,
@@ -285,6 +288,7 @@ struct OpenXRBackend::Impl {
 	XrSessionState sessionState = XR_SESSION_STATE_UNKNOWN;
 
 	int64_t swapchainFormat = 0;
+	bool rawSrgbWrites = false;		// swapchain is sRGB but the engine's colours must be stored as they are
 	int eyeWidth = 0;
 	int eyeHeight = 0;
 	XrGlSwapchain eyeSwapchains[2];
@@ -517,7 +521,21 @@ bool OpenXRBackend::Impl::CreateSwapchains() {
 
 	// The engine's final tonemapping pass already produces gamma-corrected colors, so we want a plain
 	// (non-sRGB) format that the compositor displays as is.
-	const int64_t wanted[] = { GL_RGBA8, GL_SRGB8_ALPHA8, GL_RGBA16F };
+	// With an sRGB format the compositor decodes the colours it reads, which is what it has to do for display-encoded
+	// colours. The GPU would encode the colours a second time while writing though, unless that is switched off.
+	const char *extensions = (const char *)qglGetString( GL_EXTENSIONS );
+	const bool canWriteRaw = extensions && strstr( extensions, "GL_EXT_sRGB_write_control" );
+	rawSrgbWrites = false;
+	int64_t wanted[] = { GL_RGBA8, GL_SRGB8_ALPHA8, GL_RGBA16F };
+	if ( vr_srgbSwapchain.GetInteger() == 1 ) {
+		if ( canWriteRaw ) {
+			wanted[0] = GL_SRGB8_ALPHA8;
+			wanted[1] = GL_RGBA8;
+			rawSrgbWrites = true;
+		} else {
+			XR_Log( "vr_srgbSwapchain: GL_EXT_sRGB_write_control is not available, using the RGBA8 format" );
+		}
+	}
 	swapchainFormat = 0;
 	for ( int64_t w : wanted ) {
 		for ( int64_t f : formats ) {
@@ -534,7 +552,8 @@ bool OpenXRBackend::Impl::CreateSwapchains() {
 		XR_Log( "no suitable swapchain format (%u offered)", formatCount );
 		return false;
 	}
-	XR_Log( "swapchain format: 0x%x", (unsigned)swapchainFormat );
+	rawSrgbWrites = rawSrgbWrites && swapchainFormat == GL_SRGB8_ALPHA8;
+	XR_Log( "swapchain format: 0x%x (%s)", (unsigned)swapchainFormat, rawSrgbWrites ? "sRGB, colours stored unchanged" : swapchainFormat == GL_SRGB8_ALPHA8 ? "sRGB, converted on write" : "not sRGB" );
 
 	XrViewConfigurationView views[2] = { { XR_TYPE_VIEW_CONFIGURATION_VIEW }, { XR_TYPE_VIEW_CONFIGURATION_VIEW } };
 	uint32_t viewCount = 0;
@@ -1005,6 +1024,9 @@ void OpenXRBackend::Impl::ExecutePass( const frameData_t *fd, Pass pass, FrameBu
 
 	// start from a clean state (color mask, blending, ...), the previous pass may have left anything behind
 	RB_SetDefaultGLState();
+	if ( rawSrgbWrites ) {
+		qglDisable( 0x8DB9 );	// GL_FRAMEBUFFER_SRGB_EXT: store the colours as they are, they are display-encoded already
+	}
 	GL_ViewportRelative( 0, 0, 1, 1 );
 	GL_ScissorRelative( 0, 0, 1, 1 );
 	if ( isEye ) {
