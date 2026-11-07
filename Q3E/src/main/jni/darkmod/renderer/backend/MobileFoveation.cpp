@@ -2,6 +2,7 @@
 #include "precompiled.h"
 #include "renderer/tr_local.h"
 #include "renderer/backend/MobileFoveation.h"
+#include "renderer/backend/MobileVrsProbe.h"
 #ifdef TDM_VR_OPENXR
 #include <EGL/egl.h>
 #endif
@@ -49,6 +50,7 @@ void MobileFoveation::Init() {
 		rate=(RateFunction)eglGetProcAddress("glShadingRateQCOM");qcom=rate!=nullptr;
 	}
 	currentRate=RATE_1X1;
+	if(rate){const auto probe=R_QuestProbeVrs(rate);gpuWidth=probe.width;gpuHeight=probe.height;}
 	common->Printf("Quest foveation: %s; full-resolution depth/stencil, no foveated colour textures\n",
 		!rate?"hardware shading rate unavailable":qcom?"QCOM conservative draw rates":"EXT spatial shading-rate map");
 #endif
@@ -144,6 +146,12 @@ void MobileFoveation::Shutdown() {
 void MobileFoveation::GetDiagnostics(char *buffer,int size) const {
 	const char *state=vr_foveation.GetInteger()<=0?"OFF":!rate?"UNAVAILABLE":mappedPasses?"SPATIAL VRS":
 		reducedDraws?"DRAW VRS":"IDLE: full-rate draws";
-	snprintf(buffer,size,"Foveation: %s (level %d) | map passes %d | coarse draws %d\n",
-		state,vr_foveation.GetInteger(),mappedPasses,reducedDraws);
+	const int total=reducedDraws+fullDraws;
+	char gpu[64];
+	if(gpuWidth&&gpuHeight)snprintf(gpu,sizeof(gpu),"2x2 request -> %dx%d",gpuWidth,gpuHeight);
+	else snprintf(gpu,sizeof(gpu),"unverified");
+	if(mappedPasses)snprintf(buffer,size,"Foveation: %s (level %d) | spatial map passes %d\n"
+		"VRS GPU probe: %s\n",state,vr_foveation.GetInteger(),mappedPasses,gpu);
+	else snprintf(buffer,size,"Foveation: %s (level %d) | coarse draws %d/%d (%.1f%%)\n"
+		"VRS GPU probe: %s\n",state,vr_foveation.GetInteger(),reducedDraws,total,total?100.0*reducedDraws/total:0.0,gpu);
 }

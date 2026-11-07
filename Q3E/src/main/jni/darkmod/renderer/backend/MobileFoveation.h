@@ -29,6 +29,7 @@ private:
 	unsigned mapTexture = 0, currentRate = 0;
 	int tileSize = 0, mapWidth = 0, mapHeight = 0, cachedLevel = 0, cachedSamples = 0;
 	int level = 0, reducedDraws = 0, fullDraws = 0, mappedPasses = 0;
+	int gpuWidth = 0, gpuHeight = 0;
 	MobileRenderPlan::Rect viewport, cachedViewport;
 	float centres[2][2] = {}, cachedCentres[2][2] = {};
 	void Init();

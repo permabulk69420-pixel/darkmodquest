@@ -20,6 +20,10 @@ SOURCE=ENGINE/'renderer/backend/MobileFoveation.cpp'
 HARNESS=r'''
 #include "renderer/tr_local.h"
 #include "renderer/backend/MobileFoveation.h"
+#include "renderer/backend/MobileVrsProbe.h"
+// Controller contract tests inject the startup probe result; the probe's real
+// GLES execution/state restoration is tested in mobile_vrs_probe_test.py.
+MobileVrsProbeResult R_QuestProbeVrs(void (*)(unsigned)){return {2,2};}
 struct Console{void Printf(const char *,...){}void Warning(const char *,...) {}}console,*common=&console;
 static int mode=0,rateCalls=0,querySamples=0;
 static bool failMap=false,coarse4=true;
@@ -108,6 +112,9 @@ extern "C" const char *validate_foveation(){
     glBindFramebuffer(GL_READ_FRAMEBUFFER,fb);glDeleteFramebuffers(1,&read);
    }else {foveation.Draw(edge);require(rateCalls==0&&!foveation.UsesDrawRates(),"unsupported extension was called");}
    foveation.EndLighting();require(requestedRate==0x96A6&&!attachedTexture,"rate/map leaked outside lighting");
+   char status[256];foveation.GetDiagnostics(status,sizeof(status));
+   if(mode==1)require(strstr(status,"coarse draws 3/4 (75.0%)")&&strstr(status,"2x2 request -> 2x2"),"draw fraction/probe status incorrect");
+   if(mode==2)require(strstr(status,"spatial map passes 1")&&!strstr(status,"coarse draws"),"spatial map mislabeled as zero draw coverage");
    if(mode==2)require(combiner1==0x96D2,"attachment combiner leaked");
    GLint value;glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&value);require(value==GLint(fb),"VRS changed draw target");
    glGetIntegerv(GL_DEPTH_FUNC,&value);require(value==GL_EQUAL,"VRS changed depth comparison");

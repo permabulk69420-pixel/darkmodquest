@@ -126,15 +126,35 @@ new path uses ordinary colour/depth targets throughout; unsupported hardware or
 rejected rate maps retain full-rate rendering. This addresses those failure
 mechanisms; it does not establish the exact cause of every reported black bar.
 
-The existing foveation diagnostics row reports OFF, UNAVAILABLE, SPATIAL VRS,
-DRAW VRS or idle, with map passes and actual coarse-rate draw requests. These
-are renderer/API activity counts, not measurements of GPU fragment invocations.
+The existing diagnostics overlay reports OFF, UNAVAILABLE, SPATIAL VRS, DRAW VRS
+or idle. For QCOM draw rates it also reports coarse/total lighting draw requests
+and their percentage; spatial-map drivers report map passes instead. Draw
+fractions are not pixel coverage: occlusion and screen area affect the savings.
+A low coarse-draw fraction can explain a small benefit even at High, because
+large meshes crossing the centre remain at full rate. CPU-limited scenes can
+also show little FPS improvement from less fragment shading.
+
+A one-time startup probe requests 2x2 shading and reads the GPU's own
+`gl_FragSizeEXT` or `gl_ShadingRateEXT` into a four-byte result. The HUD reports
+`2x2 request -> 2x2`, a finer response such as `1x1`, or `unverified` if the GLSL
+interface cannot be measured. This uses a 16x16 single-sample temporary target;
+it demonstrates the effective rate for that test, not the per-fragment rate of
+every scene program or framebuffer configuration. A driver may select different
+rates under actual scene conditions. The probe restores physical FBO bindings,
+program, VAO, renderbuffer, viewport, scissor, colour masks, GL enables, pixel-pack
+settings and PBO binding, leaving engine caches consistent. It runs once when
+foveation initializes, adds no per-frame readback and exports no files.
+
 `mobile_foveation_test.py` compiles the production controller with recorded
 vendor entry points and real GLES target/map allocation. It checks both-eye
-centre protection, offsets, map encoding, capability rejection, renderer restart
-and GL state restoration. Mesa multiview image tests cover the unchanged depth,
-lighting and material handoff. Qualcomm hardware rate selection, visual quality
-and frame-rate gains still require a Quest run.
+centre protection, offsets, map encoding, capability rejection, renderer restart,
+draw percentages and GL state restoration. `mobile_vrs_probe_test.py` checks the
+production probe's actual GLES execution and state restoration using a constant
+encoded-result shader fixture. It separately runs the embedded vendor shader;
+Mesa without the required interface must report unverified, not invented coarse
+shading support. These checks do not establish Qualcomm hardware results. Mesa
+multiview image tests cover the unchanged depth, lighting and material handoff.
+Actual Quest rate results, visual quality and FPS gains remain device measurements.
 
 ## Frame work
 
