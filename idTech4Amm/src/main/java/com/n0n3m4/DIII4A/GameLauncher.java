@@ -2199,6 +2199,14 @@ public class GameLauncher extends Activity
 		SetupVRSpinner(V.vr_hud_offset, R.array.vr_hud_offset_values, Q3EPreference.pref_vr_hud_offset, -20);
 
 		final SharedPreferences vrPrefs = PreferenceManager.getDefaultSharedPreferences(this);
+		V.vr_fog.setChecked(vrPrefs.getBoolean(Q3EPreference.pref_vr_fog, false));
+		V.vr_fog.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+			@Override
+			public void onCheckedChanged(CompoundButton buttonView, boolean isChecked)
+			{
+				vrPrefs.edit().putBoolean(Q3EPreference.pref_vr_fog, isChecked).commit();
+			}
+		});
 		V.vr_show_perf.setChecked(vrPrefs.getBoolean(Q3EPreference.pref_vr_show_perf, false));
 		V.vr_show_perf.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
 			@Override
@@ -5095,6 +5103,7 @@ public class GameLauncher extends Activity
 		public Spinner vr_hud_offset;
 		public CheckBox vr_srgb;
 		public CheckBox vr_show_perf;
+		public CheckBox vr_fog;
 		public LinearLayout fteqw_section;
 		public RadioGroup fteqw_vid_renderer;
 		public SeekBar consoleHeightFracValue;
@@ -5319,6 +5328,7 @@ public class GameLauncher extends Activity
 			vr_hud_offset = findViewById(R.id.vr_hud_offset);
 			vr_srgb = findViewById(R.id.vr_srgb);
 			vr_show_perf = findViewById(R.id.vr_show_perf);
+			vr_fog = findViewById(R.id.vr_fog);
 			fteqw_section = findViewById(R.id.fteqw_section);
 			fteqw_vid_renderer = findViewById(R.id.fteqw_vid_renderer);
 			consoleHeightFracValue = findViewById(R.id.consoleHeightFracValue);

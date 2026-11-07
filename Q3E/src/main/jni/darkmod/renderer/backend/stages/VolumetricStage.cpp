@@ -100,6 +100,7 @@ void VolumetricStage::Shutdown() {
 }
 
 void VolumetricStage::RenderAll(const viewDef_t *viewDef) {
+	if ( R_QuestFogDisabled(viewDef) ) return;
 	for ( const viewLight_t *vLight = viewDef->viewLights ; vLight; vLight = vLight->next ) {
 		if ( vLight->volumetricDust > 0.0f && !viewDef->IsLightGem() )
 			RenderLight( viewDef, vLight );

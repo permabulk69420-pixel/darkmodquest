@@ -443,6 +443,9 @@ viewLight_t *R_SetLightDefViewLight( idRenderLightLocal *light ) {
 		// so I placed this condition AFTER shadows implementation is chosen
 		vLight->volumetricDust = 0.0f;
 	}
+	// Keep shadow implementation selection consistent with the lightgem,
+	// including the legacy VR renderer, before removing eye-only effects.
+	if ( R_QuestFogDisabled(tr.viewDef) ) vLight->volumetricDust = 0.0f;
 
 
 	// multi-light shader stuff
@@ -1102,7 +1105,7 @@ void R_AddLightSurfaces( void ) {
 
 		// fog lights will need to draw the light frustum triangles, so make sure they
 		// are in the vertex cache
-		if ( lightShader->IsFogLight() || light->parms.volumetricDust > 0.0f || r_showLights > 1 ) {
+		if ( (!R_QuestFogDisabled(tr.viewDef) && (lightShader->IsFogLight() || light->parms.volumetricDust > 0.0f)) || r_showLights > 1 ) {
 			if ( !vertexCache.CacheIsCurrent(vLight->frustumTris->ambientCache) ) {
 				R_CreateAmbientCache( vLight->frustumTris, false );
 			}

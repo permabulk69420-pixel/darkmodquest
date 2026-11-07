@@ -61,7 +61,7 @@ void LightPassesStage::Init() {
 void LightPassesStage::Shutdown() {}
 
 void LightPassesStage::DrawAllFogLights( const viewDef_t *viewDef, const DrawMask &mask ) {
-	if ( r_skipFogLights.GetInteger() == 7 ) {	// full bitmask
+	if ( r_skipFogLights.GetInteger() == 7 || R_QuestFogDisabled(viewDef) ) {	// full bitmask
 		return;
 	}
 

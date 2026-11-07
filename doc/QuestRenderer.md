@@ -71,6 +71,13 @@ shadows; `r_questShadowAtlasSize` (512â€“4096) and `r_questShadowFaceSize` (32â€
 are launch-time quality controls. The defaults prioritize standalone frame time
 without lowering eye-buffer resolution or removing material effects.
 
+Quest VR fog and volumetric effects default to off (`vr_fog 0`). The launcher
+has a **Fog and light shafts (slower)** checkbox to restore them. Disabling fog
+also disables fog-based portal occlusion, so scenery beyond removed fog is still
+drawn. Surface lighting, shadows, and the lightgem's fog rendering are retained.
+Flat rendering keeps its existing fog settings. On older APKs,
+`+set r_volumetricEnable 0` disables volumetric effects while retaining basic fog.
+
 World/depth calculations and shadow samplers retain high precision, including
 when `harm_r_useMediumPrecision` is set. This includes the separate depth prepass:
 lowering only that pass makes the forward pass fail its `GL_EQUAL` tests and
@@ -110,6 +117,7 @@ g++ -std=c++14 -O2 -I. tests/renderer/mobile_plan_test.cpp -o /tmp/mobile-plan-t
 EGL_PLATFORM=surfaceless python3 tests/renderer/mobile_gles_test.py
 python3 bin/pack_tdm_shaders.py --check
 python3 tests/renderer/shader_install_test.py
+python3 tests/renderer/fog_policy_test.py
 ```
 
 The GLES tests require EGL and a GLES 3.2 driver (Mesa software rendering works).

@@ -17,6 +17,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #pragma hdrstop
 
 #include "renderer/tr_local.h"
+#include "renderer/backend/stages/MobileLightingStage.h"
 
 idCVar r_useLightAreaCulling( "r_useLightAreaCulling", "1", CVAR_RENDERER | CVAR_BOOL, "0 = off, 1 = on" );
 idCVar r_singleModelName( "r_singleModelName", "", CVAR_RENDERER, "filter entities by model name, e.g. 'models/darkmod/nature/flowers/flowers_patch_01.ase'" );
@@ -87,6 +88,9 @@ PortalIsFoggedOut
 ===================
 */
 bool idRenderWorldLocal::PortalIsFoggedOut( const portal_t *p ) {
+	// Geometry hidden by opaque fog becomes visible when fog rendering is off.
+	// Keep normal portal/door occlusion and the lightgem's original behavior.
+	if ( r_skipFogLights.GetInteger() == 7 || R_QuestFogDisabled(tr.viewDef) ) return false;
 	idRenderLightLocal	*ldef;
 	int			i;
 	idPlane		forward;
