@@ -9,6 +9,8 @@ import ctypes.util
 import os
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -142,6 +144,11 @@ class GLES:
         self.fn('glReadPixels',None,C.c_int,C.c_int,C.c_int,C.c_int,C.c_uint,C.c_uint,C.c_void_p)(8,8,1,1,0x1908,0x1401,data)
         assert self.error()==0
         return list(data)
+    def pixels(self,width,height):
+        data=(C.c_ubyte*(width*height*4))()
+        self.fn('glReadPixels',None,C.c_int,C.c_int,C.c_int,C.c_int,C.c_uint,C.c_uint,C.c_void_p)(0,0,width,height,0x1908,0x1401,data)
+        assert self.error()==0
+        return bytes(data)
     def close(self):
         self.make_current(self.display,None,None,None)
         self.destroy(self.display,self.context); self.terminate(self.display)
@@ -235,6 +242,74 @@ class MobileShaderTests(unittest.TestCase):
                     g.uniform(self.forward,'u_projectionMatrix',projection,'m')
                     g.call('glDepthFunc',0x0202);g.call('glDepthMask',0);g.call('glDrawArrays',4,0,6)
                     self.assertGreater(g.pixel()[0],10)
+    def test_eye_light_scissors_preserve_rendered_pixels(self):
+        # Call the production C++ projection helper, then compare complete
+        # rendered images against unscissored lighting. No copied projection
+        # implementation or hard-coded screen rectangles are used here.
+        with tempfile.TemporaryDirectory(prefix='tdm-scissor-') as directory:
+            wrapper=Path(directory)/'scissor.cpp'
+            wrapper.write_text('''
+            #include "Q3E/src/main/jni/darkmod/renderer/backend/MobileRenderPlan.h"
+            extern "C" void project(const float *lo,const float *hi,const float *view,
+              const float *projection,const int *viewport,int *out) {
+                const auto r=MobileRenderPlan::ProjectScissor(lo,hi,view,projection,
+                    {viewport[0],viewport[1],viewport[2],viewport[3]});
+                out[0]=r.x1;out[1]=r.y1;out[2]=r.x2;out[3]=r.y2;
+            }
+            ''')
+            library=Path(directory)/'scissor.so'
+            subprocess.run(['g++','-std=c++14','-O2','-shared','-fPIC','-I'+str(ROOT),str(wrapper),'-o',str(library)],check=True,capture_output=True)
+            lib=C.CDLL(str(library));project=lib.project
+            project.argtypes=[C.POINTER(C.c_float)]*4+[C.POINTER(C.c_int)]*2
+            project.restype=None
+            f=lambda value:(C.c_float*len(value))(*value)
+            cases=[
+                (-4.,[([-1.95,-.6,-4.5],[-1.25,.6,-3.5]),([1.25,-.6,-4.5],[1.95,.6,-3.5])]),
+                (-1.5,[([-1.05,-.6,-2.],[ -.35,.6,.5]),([.35,-.6,-2.],[1.05,.6,.5])]),
+                (-2.,[([-3.,-3.,-3.],[3.,3.,3.]),([.8,-.6,-2.5],[1.2,.6,-1.5])]),
+                (-4.,[([-4.1,-.6,-4.2],[-3.7,.6,-3.8]),([3.7,-.6,-4.2],[4.1,.6,-3.8])]),
+            ]
+            for case,(z,boxes) in enumerate(cases):
+                for eye in (-.35,.35):
+                    with self.subTest(case=case,eye=eye):
+                        self.setup_forward(light_count=2)
+                        g=self.gl;p=self.forward
+                        g.target(64,64);g.texture(0,(128,128,255,255));g.call('glViewport',0,0,64,64)
+                        g.call('glEnable',0x0BE2);g.call('glBlendFunc',1,1)
+                        view=IDENTITY.copy();view[12]=-eye
+                        if case==2:view[0]=-1.
+                        projection=PROJECTION.copy();projection[8]=eye*.25
+                        g.uniform(p,'u_modelViewMatrix',view,'m');g.uniform(p,'u_projectionMatrix',projection,'m')
+                        g.texture(4,(255,0,0,255));g.texture(9,(0,0,255,255))
+                        matrices=[];rects=[]
+                        for i,(lo,hi) in enumerate(boxes):
+                            matrix=[1./(hi[0]-lo[0]),0.,0.,-lo[0]/(hi[0]-lo[0]),
+                                    0.,1./(hi[1]-lo[1]),0.,-lo[1]/(hi[1]-lo[1]),
+                                    0.,0.,0.,1.,0.,0.,1./(hi[2]-lo[2]),-lo[2]/(hi[2]-lo[2])]
+                            matrices.append(matrix);g.uniform(p,f'u_lightProjection[{i}]',matrix,'m')
+                            out=(C.c_int*4)();project(f(lo),f(hi),f(view),f(projection),(C.c_int*4)(0,0,64,64),out)
+                            rects.append(list(out))
+                        def clear():
+                            g.call('glDisable',0x0C11);g.call('glColorMask',1,1,1,1)
+                            g.call('glClearColor',0.,0.,0.,1.);g.call('glClear',0x4000)
+                            g.call('glColorMask',1,1,1,0)
+                        clear();g.quad(z=z);g.call('glDrawArrays',4,0,6);reference=g.pixels(64,64)
+                        clear();g.call('glEnable',0x0C11)
+                        visible=[r for r in rects if r[2]>r[0] and r[3]>r[1]]
+                        if visible:
+                            union=[min(r[0] for r in visible),min(r[1] for r in visible),max(r[2] for r in visible),max(r[3] for r in visible)]
+                            area=lambda r:(r[2]-r[0])*(r[3]-r[1])
+                            if len(visible)==2 and area(union)<=sum(map(area,visible)):
+                                g.call('glScissor',union[0],union[1],union[2]-union[0],union[3]-union[1]);g.call('glDrawArrays',4,0,6)
+                            else:
+                                for i,r in enumerate(rects):
+                                    if r[2]<=r[0] or r[3]<=r[1]:continue
+                                    g.uniform(p,'u_lightCount',1,'i');g.uniform(p,'u_projection0',4 if i==0 else 9,'i')
+                                    g.uniform(p,'u_lightProjection[0]',matrices[i],'m')
+                                    g.call('glScissor',r[0],r[1],r[2]-r[0],r[3]-r[1]);g.call('glDrawArrays',4,0,6)
+                            if case==0:self.assertLess(sum(map(area,visible)),64*64//4)
+                        self.assertEqual(g.pixels(64,64),reference)
+                        g.call('glColorMask',1,1,1,1);g.call('glDisable',0x0C11)
     def test_volumetric_shader_links_with_mobile_shadows(self):
         self.gl.program(source('volumetric.vs'),source('volumetric_raymarching.fs'))
     def test_shadow_depth_and_local_caster_mask(self):

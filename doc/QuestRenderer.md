@@ -32,6 +32,17 @@ Each eye then uses its existing depth pass and current OpenXR view matrices to
 shade the prepared batches. Material texture fetches and parallax displacement
 are shared between the two lights in a batch. Specular/view-dependent shading,
 SSAO, soft particles, fog, volumetrics, and post-processing remain per eye.
+Lighting scissors are rebuilt from immutable light bounds and each eye's late
+view/projection matrices. They do not reuse the combined-view frontend scissors
+disabled by the OpenXR replay. Near-plane intersections are clipped before
+perspective division, and pixel bounds are rounded outward. Each batch uses the
+union of its visible lights; offscreen lights are removed before state uploads,
+and batches with no visible lights are skipped. Separated lights are split into
+tight individual draws when their union would cover a larger area than both
+rectangles together. Overlapping lights retain shared material sampling.
+Blend lights use the same eye-specific projection. Volumetric scissors are
+scaled to each work FBO, with an extra border for every blur sample. Lighting
+also requests early depth tests before material/parallax/shadow calculations.
 Volumetrics read the same shared shadow atlas. UI rendering and the lightgem
 PBO/readback protocol are unchanged; lightgem lighting retains hard shadows and
 its gamma convention.
@@ -109,6 +120,10 @@ shadows (including self-shadow rejection on sloped receivers), local/global
 caster masks, cutout shadows, and volumetric shader linking. The depth/forward
 integration check uses `GL_EQUAL` with nonintegral near/distant geometry and
 asymmetric eye projections.
+Scissor tests compare complete rendered images against unscissored lighting for
+both eyes, near-plane crossings, a camera inside a light, mirrored transforms,
+and peripheral lights visible to only one eye. The CPU check independently
+samples 10,000 transformed boxes to ensure visible points are never clipped.
 They do not emulate the headset compositor or measure Quest frame times.
 
 The install check requires a JDK and compiles the production Java ZIP extraction
@@ -141,6 +156,10 @@ light packets versus batches, shared shadow draws, and actual lighting draws per
 frame. To compare the old path, launch with `+set r_questRenderer 0`; it is an
 initialization setting, so comparisons require a restart. Existing resolution,
 foveation, refresh-rate preferences, and controls are retained.
+`r_questLightScissor` defaults to 1 and can be set to 0 for a comparison.
+`r_questShowRenderStats 1` reports lighting scissor area, offscreen batch skips
+and separated-light batch splits. Area is a bound on allowed fragment coverage,
+not a measured GPU-time or FPS improvement.
 
 Stable 72 FPS, thermal behavior, visual parity in missions, mirrors, and stealth
 lightgem values require a Quest 3 run. Native build checks and offscreen rendering

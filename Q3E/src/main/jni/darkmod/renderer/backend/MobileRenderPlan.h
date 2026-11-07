@@ -4,11 +4,85 @@
 #include <algorithm>
 #include <vector>
 #include <utility>
+#include <cmath>
+#include <limits>
 
 // GL-independent, deterministic shelf packing. Each light owns six global and
 // six local cube faces in a 3 x 4 rectangle. Both eyes use exactly these pages.
 // Reduce resolution under pressure; never drop a light or its shadows.
 namespace MobileRenderPlan {
+// Half-open framebuffer pixel coordinates, independent of the combined-view
+// rectangles produced by the frontend before the late OpenXR eye poses.
+struct Rect {
+	int x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+	bool Empty() const { return x2 <= x1 || y2 <= y1; }
+	long long Area() const { return Empty() ? 0 : static_cast<long long>(x2-x1) * (y2-y1); }
+	void Add( const Rect &r ) {
+		if ( r.Empty() ) return;
+		if ( Empty() ) { *this = r; return; }
+		x1 = std::min(x1, r.x1); y1 = std::min(y1, r.y1);
+		x2 = std::max(x2, r.x2); y2 = std::max(y2, r.y2);
+	}
+};
+
+// Project a world AABB with the active eye's matrices. Clip edges against the
+// near plane before dividing by W: simply dropping behind-eye corners clips
+// visible lights as the head moves through them. Outward pixel rounding and a
+// one-pixel guard preserve coverage with MSAA and floating-point roundoff.
+inline Rect ProjectScissor( const float lo[3], const float hi[3],
+	const float modelView[16], const float projection[16], const Rect &viewport ) {
+	if ( viewport.Empty() ) return {};
+	for ( int i = 0; i < 3; ++i )
+		if ( !std::isfinite(lo[i]) || !std::isfinite(hi[i]) || lo[i] > hi[i] ) return viewport;
+	double clip[8][4];
+	for ( int i = 0; i < 8; ++i ) {
+		double point[4] = { (i&1) ? hi[0] : lo[0], (i&2) ? hi[1] : lo[1], (i&4) ? hi[2] : lo[2], 1.0 };
+		double view[4] = {};
+		for ( int row = 0; row < 4; ++row )
+			for ( int col = 0; col < 4; ++col ) view[row] += modelView[4*col+row] * point[col];
+		for ( int row = 0; row < 4; ++row ) {
+			clip[i][row] = 0;
+			for ( int col = 0; col < 4; ++col ) clip[i][row] += projection[4*col+row] * view[col];
+			if ( !std::isfinite(clip[i][row]) ) return viewport;
+		}
+	}
+	double minX = std::numeric_limits<double>::infinity(), minY = minX;
+	double maxX = -minX, maxY = -minY;
+	bool uncertain = false;
+	auto add = [&]( const double p[4] ) {
+		if ( p[3] <= 1e-8 ) { uncertain = true; return; }
+		const double x = p[0]/p[3], y = p[1]/p[3];
+		minX = std::min(minX, x); maxX = std::max(maxX, x);
+		minY = std::min(minY, y); maxY = std::max(maxY, y);
+	};
+	for ( int i = 0; i < 8; ++i ) {
+		const double da = clip[i][2] + clip[i][3];
+		if ( std::abs(da) < 1e-6 * (std::abs(clip[i][2])+std::abs(clip[i][3])+1.0) ) return viewport;
+		if ( da >= 0 ) add(clip[i]);
+		for ( int axis = 0; axis < 3; ++axis ) {
+			const int j = i ^ (1<<axis);
+			if ( j < i ) continue;
+			const double db = clip[j][2] + clip[j][3];
+			if ( (da < 0) == (db < 0) ) continue;
+			const double t = da / (da-db);
+			double p[4];
+			for ( int k = 0; k < 4; ++k ) p[k] = clip[i][k] + t * (clip[j][k]-clip[i][k]);
+			add(p);
+		}
+	}
+	if ( uncertain ) return viewport;
+	if ( minX > maxX ) return {};
+	const int width = viewport.x2-viewport.x1, height = viewport.y2-viewport.y1;
+	if ( minX > 1.0+2.0/width || maxX < -1.0-2.0/width || minY > 1.0+2.0/height || maxY < -1.0-2.0/height ) return {};
+	auto clampNdc = [](double x) { return std::max(-1.0, std::min(1.0, x)); };
+	Rect r;
+	r.x1 = std::max(viewport.x1, viewport.x1 + int(std::floor((clampNdc(minX)*0.5+0.5)*width))-1);
+	r.y1 = std::max(viewport.y1, viewport.y1 + int(std::floor((clampNdc(minY)*0.5+0.5)*height))-1);
+	r.x2 = std::min(viewport.x2, viewport.x1 + int(std::ceil((clampNdc(maxX)*0.5+0.5)*width))+1);
+	r.y2 = std::min(viewport.y2, viewport.y1 + int(std::ceil((clampNdc(maxY)*0.5+0.5)*height))+1);
+	return r;
+}
+
 // Conservative mask for a light-relative world AABB. A face is needed iff the
 // box can reach that signed major axis without lying outside its side planes.
 inline unsigned CubeFaceMask( const float lo[3], const float hi[3] ) {

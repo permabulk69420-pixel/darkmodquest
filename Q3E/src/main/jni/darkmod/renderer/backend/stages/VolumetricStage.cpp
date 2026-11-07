@@ -129,6 +129,8 @@ bool VolumetricStage::RenderLight(const viewDef_t *viewDef, const viewLight_t *v
 	// not sure if it is important to set global variables, but let's require it for now
 	this->viewDef = viewDef;
 	this->viewLight = viewLight;
+	if ( R_UseQuestLightScissors() && RB_QuestLightScissor(viewDef, viewLight,
+		{0, 0, frameBuffers->activeFbo->Width(), frameBuffers->activeFbo->Height()}).Empty() ) return false;
 
 	if ( !viewLight->frustumTris->ambientCache.IsValid() ) {
 		// ran out of vertex cache memory => skip it
@@ -270,6 +272,17 @@ void VolumetricStage::SetScissor() {
 	// so we need to rescale scissor rectangle to FBO resolution
 	int w = frameBuffers->activeFbo->Width();
 	int h = frameBuffers->activeFbo->Height();
+	if ( R_UseQuestLightScissors() ) {
+		qglEnable(GL_SCISSOR_TEST);
+		auto r = RB_QuestLightScissor(viewDef, viewLight, {0, 0, w, h});
+		// Include every texel the separable blur may read, at this FBO's
+		// actual resolution, including the downsampled raymarching target.
+		const int margin = int(5 + 3.0f * r_volumetricBlur.GetFloat());
+		r.x1 = std::max(0, r.x1-margin); r.y1 = std::max(0, r.y1-margin);
+		r.x2 = std::min(w, r.x2+margin); r.y2 = std::min(h, r.y2+margin);
+		GL_ScissorAbsolute(r.x1, r.y1, std::max(0, r.x2-r.x1), std::max(0, r.y2-r.y1));
+		return;
+	}
 	idScreenRect rect = viewLight->scissorRect;
 	rect.x1 = rect.x1 * w / glConfig.vidWidth;
 	rect.y1 = rect.y1 * h / glConfig.vidHeight;

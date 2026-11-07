@@ -25,6 +25,8 @@ idCVar r_questShadowFaceSize( "r_questShadowFaceSize", "256", CVAR_RENDERER | CV
 	"Maximum shadow face resolution; smaller lights use smaller pages", 32, 512 );
 idCVar r_questShowRenderStats( "r_questShowRenderStats", "0", CVAR_RENDERER | CVAR_BOOL,
 	"Log shared shadow draws and two-eye lighting batch counts every 120 frames" );
+idCVar r_questLightScissor( "r_questLightScissor", "1", CVAR_RENDERER | CVAR_BOOL | CVAR_ARCHIVE,
+	"Clip mobile lighting, blend lights and volumetrics to bounds projected for the active eye" );
 
 bool R_UseMobileLighting() {
 #ifdef TDM_VR_OPENXR
@@ -32,6 +34,24 @@ bool R_UseMobileLighting() {
 #else
 	return false;
 #endif
+}
+
+bool R_UseQuestLightScissors() { return R_UseMobileLighting() && r_questLightScissor.GetBool(); }
+
+MobileRenderPlan::Rect RB_QuestViewViewport( const viewDef_t *view ) {
+	const int w = frameBuffers->activeFbo->Width(), h = frameBuffers->activeFbo->Height();
+	const int x = (tr.viewportOffset[0] + view->viewport.x1) * w / glConfig.vidWidth;
+	const int y = (tr.viewportOffset[1] + view->viewport.y1) * h / glConfig.vidHeight;
+	return { x, y, x + view->viewport.GetWidth() * w / glConfig.vidWidth,
+		y + view->viewport.GetHeight() * h / glConfig.vidHeight };
+}
+
+MobileRenderPlan::Rect RB_QuestLightScissor( const viewDef_t *view, const viewLight_t *light,
+	const MobileRenderPlan::Rect &viewport ) {
+	if ( !R_UseQuestLightScissors() || !light->frustumTris ) return viewport;
+	const idBounds &bounds = light->frustumTris->bounds;
+	return MobileRenderPlan::ProjectScissor(bounds[0].ToFloatPtr(), bounds[1].ToFloatPtr(),
+		view->worldSpace.modelViewMatrix, view->projectionMatrix, viewport);
 }
 
 namespace {
@@ -100,9 +120,15 @@ struct Packet {
 	const viewLight_t *light;
 	bool local, translucent;
 	const drawSurf_t *geometry;
+	int lightIndex;
 };
 struct Batch { Packet lights[2]; int count = 0; };
-struct ViewPlan { std::vector<Batch> batches; };
+struct LightClip { const viewLight_t *light; MobileRenderPlan::Rect rect; };
+struct ViewPlan {
+	std::vector<Batch> batches;
+	std::vector<LightClip> lights;
+	MobileRenderPlan::Rect viewport, currentScissor;
+};
 struct Shadow {
 	const viewDef_t *view;
 	const viewLight_t *light;
@@ -150,11 +176,14 @@ struct MobileLightingStage::Impl {
 	std::unordered_map<const viewLight_t *, size_t> shadowIndex;
 	std::vector<Shadow> shadows;
 	int packets = 0, batches = 0, shadowDraws = 0, eyeDraws = 0, frames = 0;
+	int culledBatches = 0;
+	int splitBatches = 0;
+	long long scissorPixels = 0, fullPixels = 0;
 
 	void Collect( const viewDef_t *view );
 	void DrawShadows();
 	void DrawCaster( const drawSurf_t *surf, ShadowUniforms *u );
-	void DrawBatch( const viewDef_t *view, const Batch &batch, LightingUniforms *u );
+	void DrawBatch( const viewDef_t *view, ViewPlan &plan, const Batch &batch, LightingUniforms *u );
 	bool ShadowInfo( const viewLight_t *light, bool local, idVec4 &page, idVec4 &params, float projection[16] ) const;
 };
 
@@ -178,6 +207,8 @@ void MobileLightingStage::EndFrame() {
 	if ( !impl->views.empty() && impl->eyeDraws > 0 && ++impl->frames % 120 == 0 && r_questShowRenderStats.GetBool() ) {
 		common->Printf("Quest renderer: %d views prepared once; %d light packets -> %d batches; %d shared shadow draws; %d lighting draws across replays; atlas %d\n",
 			int(impl->views.size()), impl->packets, impl->batches, impl->shadowDraws, impl->eyeDraws, impl->atlasSize);
+		common->Printf("Quest lighting scissors: %.1f%% of full draw area; %d offscreen batches skipped; %d separated-light batches split\n",
+			100.0 * double(impl->scissorPixels) / std::max(1.0, double(impl->fullPixels)), impl->culledBatches, impl->splitBatches);
 	}
 	impl->views.clear();
 	impl->shadowIndex.clear();
@@ -202,6 +233,9 @@ void MobileLightingStage::BeginFrame( const emptyCommand_t *commands ) {
 	// Reset before shared depth, not just before the subsequent eye replays.
 	RB_SetDefaultGLState();
 	impl->packets = impl->batches = impl->shadowDraws = impl->eyeDraws = 0;
+	impl->culledBatches = 0;
+	impl->splitBatches = 0;
+	impl->scissorPixels = impl->fullPixels = 0;
 	const float savedScale = backEnd.lightScale;
 	backEnd.lightScale = r_lightScale.GetFloat();
 	for ( const emptyCommand_t *cmd = commands; cmd; cmd = (const emptyCommand_t *)cmd->next ) {
@@ -234,6 +268,7 @@ void MobileLightingStage::BeginFrame( const emptyCommand_t *commands ) {
 
 void MobileLightingStage::Impl::Collect( const viewDef_t *view ) {
 	std::vector<Packet> opaque, translucent;
+	ViewPlan &plan = views[view];
 	// Prefer a surface's original index buffer over per-light clipped index
 	// subsets. Light-volume clipping happens in the forward shader. This lets
 	// different lights on one mesh share a draw rather than requiring identical
@@ -259,6 +294,8 @@ void MobileLightingStage::Impl::Collect( const viewDef_t *view ) {
 		if ( light->lightShader->IsAmbientLight() ) {
 			if ( r_skipAmbient.GetInteger() & 2 ) continue;
 		} else if ( r_skipInteractions.GetBool() && (r_skipInteractions.GetInteger() == 1 || !light->noShadows) ) continue;
+		const int lightIndex = int(plan.lights.size());
+		plan.lights.push_back({light, {}});
 		for ( int list = 0; list < 3; ++list ) {
 			if ( list == 2 && r_skipTranslucent.GetBool() ) continue;
 			const drawSurf_t *first = list == 0 ? light->localInteractions : list == 1 ? light->globalInteractions : light->translucentInteractions;
@@ -271,7 +308,7 @@ void MobileLightingStage::Impl::Collect( const viewDef_t *view ) {
 						const drawSurf_t *geometry = surf;
 						auto mesh = meshes.find(meshKey(surf));
 						if ( mesh != meshes.end() && mesh->second ) geometry = mesh->second;
-						Packet p = { value, light, list == 0, list == 2, geometry };
+						Packet p = { value, light, list == 0, list == 2, geometry, lightIndex };
 						extern idCVar r_materialNewParse;
 						if ( !p.inter.bumpImage && !r_skipBump.GetBool() && !r_materialNewParse.GetBool() ) return;
 						if ( !p.inter.diffuseImage && !p.inter.specularImage ) return;
@@ -291,7 +328,6 @@ void MobileLightingStage::Impl::Collect( const viewDef_t *view ) {
 	// the original additive order (no depth writes); never cross geometry keys.
 	if ( std::none_of(opaque.begin(), opaque.end(), HasNegativeColor) )
 		std::stable_sort( opaque.begin(), opaque.end(), [](const Packet &a, const Packet &b) { return GeometryKey(a) < GeometryKey(b); } );
-	ViewPlan &plan = views[view];
 	for ( const auto *list : { &opaque, &translucent } ) {
 		for ( const Packet &p : *list ) {
 			if ( plan.batches.empty() || plan.batches.back().count == 2 || !Compatible(plan.batches.back().lights[0], p) ) plan.batches.push_back({});
@@ -436,8 +472,39 @@ void MobileLightingStage::BindShadowTexture( int unit ) {
 	Bind(unit, impl->atlas ? (idImage *)impl->atlas : globalImages->whiteImage);
 }
 
-void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, const Batch &batch, LightingUniforms *u ) {
-	const auto &first = batch.lights[0];
+void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, ViewPlan &plan, const Batch &batch, LightingUniforms *u ) {
+	const Packet *visible[2];
+	int count = 0;
+	MobileRenderPlan::Rect rect;
+	for ( int i = 0; i < batch.count; ++i ) {
+		const Packet &p = batch.lights[i];
+		const auto &r = plan.lights[p.lightIndex].rect;
+		if ( r.Empty() ) continue;
+		visible[count++] = &p;
+		rect.Add(r);
+	}
+	if ( count == 0 ) { fullPixels += plan.viewport.Area(); ++culledBatches; return; }
+	if ( count == 2 && rect.Area() > plan.lights[visible[0]->lightIndex].rect.Area() +
+		plan.lights[visible[1]->lightIndex].rect.Area() ) {
+		// A large empty gap makes a fused draw more expensive than two tight
+		// light draws. Retain batching for overlapping lights, not distant ones.
+		++splitBatches;
+		Batch single;
+		single.count = 1;
+		for ( int i = 0; i < 2; ++i ) {
+			single.lights[0] = *visible[i];
+			DrawBatch(view, plan, single, u);
+		}
+		return;
+	}
+	fullPixels += plan.viewport.Area();
+	scissorPixels += rect.Area();
+	if ( rect.x1 != plan.currentScissor.x1 || rect.y1 != plan.currentScissor.y1 ||
+		rect.x2 != plan.currentScissor.x2 || rect.y2 != plan.currentScissor.y2 ) {
+		GL_ScissorAbsolute(rect.x1, rect.y1, rect.x2-rect.x1, rect.y2-rect.y1);
+		plan.currentScissor = rect;
+	}
+	const auto &first = *visible[0];
 	const drawInteraction_t &inter = first.inter;
 	const drawSurf_t *surf = first.geometry;
 	GL_State( GLS_SRCBLEND_ONE | GLS_DSTBLEND_ONE | GLS_DEPTHMASK |
@@ -469,8 +536,8 @@ void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, const Batch &b
 	idVec3 origins[2]; idVec4 diffuse[2], specular[2], pages[2], params[2], tex[4];
 	float projections[32] = {}, shadowProjections[32] = {};
 	int lightFlags[2] = {};
-	for ( int i = 0; i < batch.count; ++i ) {
-		const Packet &p = batch.lights[i]; const auto &d = p.inter; const auto *l = p.light;
+	for ( int i = 0; i < count; ++i ) {
+		const Packet &p = *visible[i]; const auto &d = p.inter; const auto *l = p.light;
 		origins[i] = l->globalLightOrigin; diffuse[i] = d.diffuseColor; specular[i] = d.specularColor;
 		memcpy(projections + i*16, d.lightProjection, 16*sizeof(float));
 		tex[2*i] = d.lightTextureMatrix[0]; tex[2*i+1] = d.lightTextureMatrix[1];
@@ -493,7 +560,7 @@ void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, const Batch &b
 		Bind(base+3, ambientDiffuse ? ambientDiffuse : globalImages->whiteCubeMapImage);
 		Bind(base+4, ambientSpecular ? ambientSpecular : globalImages->blackCubeMapImage);
 	}
-	if ( batch.count == 1 ) {
+	if ( count == 1 ) {
 		// GLES considers every active sampler, even in a uniform-disabled branch.
 		// Never inherit incomplete textures or a render target from an earlier
 		// pass in the unused second light slot.
@@ -503,16 +570,16 @@ void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, const Batch &b
 		Bind(12, globalImages->whiteCubeMapImage);
 		Bind(13, globalImages->blackCubeMapImage);
 	}
-	u->lightCount.Set(batch.count);
-	u->lightFlags.SetArray(batch.count, lightFlags);
-	u->lightOrigin.SetArray(batch.count, origins[0].ToFloatPtr());
-	u->diffuseColor.SetArray(batch.count, diffuse[0].ToFloatPtr());
-	u->specularColor.SetArray(batch.count, specular[0].ToFloatPtr());
-	u->lightProjection.SetArray(batch.count, projections);
-	u->lightTextureMatrix.SetArray(2*batch.count, tex[0].ToFloatPtr());
-	u->shadowPage.SetArray(batch.count, pages[0].ToFloatPtr());
-	u->shadowParams.SetArray(batch.count, params[0].ToFloatPtr());
-	u->shadowProjection.SetArray(batch.count, shadowProjections);
+	u->lightCount.Set(count);
+	u->lightFlags.SetArray(count, lightFlags);
+	u->lightOrigin.SetArray(count, origins[0].ToFloatPtr());
+	u->diffuseColor.SetArray(count, diffuse[0].ToFloatPtr());
+	u->specularColor.SetArray(count, specular[0].ToFloatPtr());
+	u->lightProjection.SetArray(count, projections);
+	u->lightTextureMatrix.SetArray(2*count, tex[0].ToFloatPtr());
+	u->shadowPage.SetArray(count, pages[0].ToFloatPtr());
+	u->shadowParams.SetArray(count, params[0].ToFloatPtr());
+	u->shadowProjection.SetArray(count, shadowProjections);
 	RB_DrawElementsWithCounters(surf, DCK_INTERACTION); ++eyeDraws;
 }
 
@@ -522,6 +589,7 @@ void MobileLightingStage::Draw( const viewDef_t *view ) {
 	TRACE_GL_SCOPE("QuestForwardLighting");
 	frameBuffers->currentRenderFbo->Bind();
 	FB_ApplyViewport();
+	qglEnable(GL_SCISSOR_TEST);
 	impl->lighting->Activate();
 	auto u = impl->lighting->GetUniformGroup<LightingUniforms>();
 	u->normalTexture.Set(0); u->diffuseTexture.Set(1); u->specularTexture.Set(2); u->parallaxTexture.Set(3);
@@ -540,7 +608,12 @@ void MobileLightingStage::Draw( const viewDef_t *view ) {
 	qglDisable(GL_STENCIL_TEST);
 	backEnd.currentScissor = view->scissor;
 	FB_ApplyScissor();
-	for ( const Batch &batch : it->second.batches ) impl->DrawBatch(view, batch, u);
+	ViewPlan &plan = it->second;
+	plan.viewport = RB_QuestViewViewport(view);
+	plan.currentScissor = {}; // force the first draw to set actual pixel bounds
+	for ( auto &light : plan.lights ) light.rect = RB_QuestLightScissor(view, light.light, plan.viewport);
+	for ( const Batch &batch : plan.batches ) impl->DrawBatch(view, plan, batch, u);
+	FB_ApplyScissor();
 	qglEnable(GL_STENCIL_TEST);
 	qglStencilFunc(GL_ALWAYS, 128, 255);
 	GL_Cull(CT_FRONT_SIDED);

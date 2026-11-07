@@ -14,6 +14,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 ******************************************************************************/
 
 #include "precompiled.h"
+#include "renderer/backend/stages/MobileLightingStage.h"
 
 #include "renderer/backend/stages/LightPassesStage.h"
 
@@ -100,6 +101,8 @@ void LightPassesStage::DrawAllBlendLights( const viewDef_t *viewDef ) {
 	}
 
 	qglEnable( GL_STENCIL_TEST );
+	backEnd.currentScissor = viewDef->scissor;
+	FB_ApplyScissor();
 	GL_SelectTexture( 0 );
 }
 
@@ -196,6 +199,11 @@ void LightPassesStage::DrawBlendLight() {
 	// so we can ignore everything outside light volume
 	backEnd.currentScissor = vLight->scissorRect;
 	FB_ApplyScissor();
+	if ( R_UseQuestLightScissors() ) {
+		const auto r = RB_QuestLightScissor(viewDef, vLight, RB_QuestViewViewport(viewDef));
+		if ( r.Empty() ) return;
+		GL_ScissorAbsolute(r.x1, r.y1, r.x2-r.x1, r.y2-r.y1);
+	}
 
 	// Dual texture together the falloff and projection texture with a blend
 	// mode to the framebuffer, instead of interacting with the surface texture

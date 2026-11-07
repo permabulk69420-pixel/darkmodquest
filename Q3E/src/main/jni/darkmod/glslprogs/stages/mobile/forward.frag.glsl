@@ -1,6 +1,9 @@
 #version 320 es
 precision highp float;
 precision highp int;
+// Lighting never writes depth or stencil. Reject hidden fragments before
+// material/parallax/shadow work, including programs with mirror-plane discard.
+layout(early_fragment_tests) in;
 #pragma tdm_include "tdm_utils.glsl"
 #pragma tdm_include "tdm_lightproject.glsl"
 #pragma tdm_include "tdm_interaction.glsl"

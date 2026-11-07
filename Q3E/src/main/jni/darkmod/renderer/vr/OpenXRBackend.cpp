@@ -1095,6 +1095,8 @@ void OpenXRBackend::Impl::ExecutePass( const frameData_t *fd, Pass pass, FrameBu
 
 	// Scissor rectangles and depth bounds computed by the frontend are only valid for the combined view, not for
 	// the individual eyes. (Other code, e.g. the r_lockView handling, may switch them back on.)
+	// Mobile lighting/volumetrics apply independent scissors from the late eye
+	// matrices; this switch only disables the obsolete frontend rectangles.
 	if ( r_useScissor.GetBool() ) {
 		r_useScissor.SetBool( false );
 	}

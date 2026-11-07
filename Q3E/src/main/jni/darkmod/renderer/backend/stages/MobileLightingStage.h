@@ -2,11 +2,16 @@
 #pragma once
 
 #include "renderer/tr_local.h"
+#include "renderer/backend/MobileRenderPlan.h"
 #include <memory>
 
 // Quest's forward renderer. The combined-view frontend is retained; all
 // eye-independent work is prepared before the OpenXR eye command replays.
 bool R_UseMobileLighting();
+bool R_UseQuestLightScissors();
+MobileRenderPlan::Rect RB_QuestViewViewport( const viewDef_t *view );
+MobileRenderPlan::Rect RB_QuestLightScissor( const viewDef_t *view, const viewLight_t *light,
+	const MobileRenderPlan::Rect &viewport );
 
 class MobileLightingStage {
 public:

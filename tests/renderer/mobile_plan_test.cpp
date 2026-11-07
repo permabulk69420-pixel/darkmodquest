@@ -60,4 +60,55 @@ int main() {
         }
     }
     std::cout << "PASS: atlas bounds/overlap/pressure/determinism; six face directions; 80,000 conservative corner checks\n";
+    const float identity[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    float projection[16] = {1,0,0,0, 0,1,0,0, 0,0,-1,-1, 0,0,-2,0};
+    const Rect viewport = {7,11,1031,779};
+    float boxLo[3] = {-1,-1,-10}, boxHi[3] = {1,1,-8};
+    Rect small = ProjectScissor(boxLo,boxHi,identity,projection,viewport);
+    assert(!small.Empty() && small.Area() < viewport.Area()/20);
+    float behindLo[3] = {-1,-1,2}, behindHi[3] = {1,1,4};
+    assert(ProjectScissor(behindLo,behindHi,identity,projection,viewport).Empty());
+    float aroundLo[3] = {-10,-10,-2}, aroundHi[3] = {10,10,2};
+    assert(ProjectScissor(aroundLo,aroundHi,identity,projection,viewport).Area()==viewport.Area());
+    float eye[16]; std::copy(identity,identity+16,eye);
+    eye[12]=0.5f; Rect left=ProjectScissor(boxLo,boxHi,eye,projection,viewport);
+    eye[12]=-0.5f; Rect right=ProjectScissor(boxLo,boxHi,eye,projection,viewport);
+    assert(left.x1>right.x1 && left.x2>right.x2);
+    Rect both; both.Add(left);both.Add(right);both.Add({});
+    assert(both.x1==right.x1 && both.x2==left.x2);
+    // Sample points independently with float shader-style MVP operations.
+    // Every point in the eye's clip volume must survive the CPU scissor,
+    // including near-plane intersections, mirrored axes and asymmetric eyes.
+    int visiblePoints=0;
+    for(int n=0;n<10000;++n) {
+        for(int axis=0;axis<3;++axis) {
+            boxLo[axis]=float(int(rng()%800)-400)*0.1f;
+            boxHi[axis]=boxLo[axis]+float(rng()%200+1)*0.1f;
+        }
+        std::copy(identity,identity+16,eye);
+        const float angle=float(int(rng()%100)-50)*0.01f;
+        eye[0]=std::cos(angle);eye[2]=std::sin(angle);
+        eye[8]=-std::sin(angle);eye[10]=std::cos(angle);
+        if(n&1) {eye[0]=-eye[0];eye[8]=-eye[8];}
+        eye[12]=float(int(rng()%40)-20)*0.03f;
+        eye[13]=float(int(rng()%40)-20)*0.03f;
+        projection[8]=float(int(rng()%60)-30)*0.01f;
+        projection[9]=float(int(rng()%60)-30)*0.01f;
+        const Rect r=ProjectScissor(boxLo,boxHi,eye,projection,viewport);
+        assert(r.Empty() || (r.x1>=viewport.x1 && r.x2<=viewport.x2 && r.y1>=viewport.y1 && r.y2<=viewport.y2));
+        for(int sample=0;sample<64;++sample) {
+            float point[4]={0,0,0,1},v[4]={},clip[4]={};
+            for(int axis=0;axis<3;++axis) point[axis]=boxLo[axis]+(boxHi[axis]-boxLo[axis])*float(rng()%10001)/10000.0f;
+            for(int row=0;row<4;++row) for(int col=0;col<4;++col) v[row]+=eye[4*col+row]*point[col];
+            for(int row=0;row<4;++row) for(int col=0;col<4;++col) clip[row]+=projection[4*col+row]*v[col];
+            if(clip[3]<=0 || clip[2]<-clip[3] || clip[2]>clip[3] ||
+                std::abs(clip[0])>clip[3] || std::abs(clip[1])>clip[3]) continue;
+            const float x=viewport.x1+(clip[0]/clip[3]*0.5f+0.5f)*(viewport.x2-viewport.x1);
+            const float y=viewport.y1+(clip[1]/clip[3]*0.5f+0.5f)*(viewport.y2-viewport.y1);
+            assert(!r.Empty() && x>=r.x1 && x<=r.x2 && y>=r.y1 && y<=r.y2);
+            ++visiblePoints;
+        }
+    }
+    assert(visiblePoints>10000);
+    std::cout<<"PASS: eye-specific scissors retain "<<visiblePoints<<" visible points across 10,000 rotated/mirrored/near-clipped boxes\n";
 }
