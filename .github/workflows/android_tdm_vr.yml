@@ -1,11 +1,13 @@
-# Builds only The Dark Mod for arm64-v8a (the Quest 3 target) and publishes the APK as a workflow artifact.
+# Builds only The Dark Mod for arm64-v8a (the Quest 3 target), publishes the APK
+# as a workflow artifact and updates a stable GitHub Release download.
 #
 # Triggers:
 #   - push to the VR work branch, but ONLY when the head commit message contains "[apk]"
 #     (so ordinary pushes do not spend CI minutes)
 #   - manual "Run workflow" (needs this file to exist on the default branch)
 #
-# Download the APK from the run page: Actions -> this workflow -> the run -> Artifacts.
+# Simple phone download: Releases -> Quest 3 APK (latest successful build).
+# Direct stable URL: https://github.com/permabulk69420-pixel/darkmodquest/releases/download/quest-apk/TDM-Quest-arm64.apk
 
 name: Android APK - TDM only (arm64)
 
@@ -13,6 +15,9 @@ on:
   push:
     branches: [ "ccr-f26da023-1l9zer" ]
   workflow_dispatch:
+
+permissions:
+  contents: write  # allows gh release to publish the APK
 
 concurrency:
   group: tdm-apk-${{ github.ref }}
@@ -57,7 +62,7 @@ jobs:
     - name: Collect APK
       run: |
         mkdir -p out
-        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-quest-${GITHUB_SHA::7}-arm64.apk"
+        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest-arm64.apk"
         ls -la out
 
     - name: Upload APK artifact
@@ -67,3 +72,18 @@ jobs:
         path: out/*.apk
         if-no-files-found: error
         retention-days: 30
+
+    - name: Publish easy-download Quest APK
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        tag=quest-apk
+        apk=out/TDM-Quest-arm64.apk
+        notes="Latest successful Quest 3 ARM64 build. Source commit: ${GITHUB_SHA} (branch ${GITHUB_REF_NAME}). This download is automatically replaced after the next successful [apk] build."
+        if gh release view "$tag" >/dev/null 2>&1; then
+          gh release upload "$tag" "$apk" --clobber
+          gh release edit "$tag" --title "Quest 3 APK (latest successful build)" --notes "$notes"
+        else
+          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 APK (latest successful build)" --notes "$notes"
+        fi
