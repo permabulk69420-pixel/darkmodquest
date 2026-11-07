@@ -1,6 +1,8 @@
 #version 320 es
 precision highp float;
 precision highp int;
+// Surface lighting uses GL_EQUAL against the separate depth program.
+invariant gl_Position;
 #pragma tdm_include "tdm_utils.glsl"
 #pragma tdm_include "tdm_interaction.glsl"
 in vec4 attr_Position;

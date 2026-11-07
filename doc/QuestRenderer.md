@@ -61,7 +61,15 @@ are launch-time quality controls. The defaults prioritize standalone frame time
 without lowering eye-buffer resolution or removing material effects.
 
 World/depth calculations and shadow samplers retain high precision, including
-when `harm_r_useMediumPrecision` is set. Android depth attachment upload types
+when `harm_r_useMediumPrecision` is set. This includes the separate depth prepass:
+lowering only that pass makes the forward pass fail its `GL_EQUAL` tests and
+leave black patches. Depth and interaction vertex programs declare invariant
+positions to preserve their agreement across driver compiler optimizations.
+Directional shadow comparisons use a geometric receiver-plane bias scaled to
+the atlas sampling footprint; a fixed epsilon causes sloped surfaces to shadow
+themselves at mobile resolutions. Every active light sampler has a complete
+texture binding, including unused second-light slots.
+Android depth attachment upload types
 are valid GLES types. The Android Release target explicitly uses `-O2`; NDK r23's
 legacy CMake setup previously allowed a Release build with no optimization flag.
 
@@ -96,7 +104,10 @@ The GLES tests require EGL and a GLES 3.2 driver (Mesa software rendering works)
 They compile/link the actual shipping shaders and render small offscreen targets.
 They check two-light accumulation, independent light textures, light-volume and
 mirror clipping, eye-specific specular shading, all six shadow faces, directional
-shadows, local/global caster masks, cutout shadows, and volumetric shader linking.
+shadows (including self-shadow rejection on sloped receivers), local/global
+caster masks, cutout shadows, and volumetric shader linking. The depth/forward
+integration check uses `GL_EQUAL` with nonintegral near/distant geometry and
+asymmetric eye projections.
 They do not emulate the headset compositor or measure Quest frame times.
 
 `bin/pack_tdm_shaders.py` regenerates the Android shader archive deterministically.

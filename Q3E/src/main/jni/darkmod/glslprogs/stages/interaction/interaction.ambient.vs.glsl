@@ -17,6 +17,8 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 precision highp float;
 precision highp int;
 
+invariant gl_Position;
+
 #pragma tdm_include "tdm_lightproject.glsl"
 #pragma tdm_include "tdm_interaction.glsl"
 #pragma tdm_include "tdm_utils.glsl"

@@ -20,6 +20,8 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #pragma tdm_include "tdm_interaction.glsl"
 #pragma tdm_include "tdm_utils.glsl"
 
+invariant gl_Position;
+
 in vec4 attr_Position;
 in vec4 attr_TexCoord;
 in vec3 attr_Tangent;

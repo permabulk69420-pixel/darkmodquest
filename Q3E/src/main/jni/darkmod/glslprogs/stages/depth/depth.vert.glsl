@@ -17,6 +17,9 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 precision highp float;
 precision highp int;
 
+// Match the forward pass exactly on drivers that contract/reorder arithmetic.
+invariant gl_Position;
+
 #pragma tdm_include "tdm_utils.glsl"
 
 in vec4 attr_Position;

@@ -482,10 +482,20 @@ void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, const Batch &b
 		// Samplers of different types always have distinct units, even if the
 		// inactive branch won't sample one of them (GLES program validation).
 		Bind(base, l->lightShader->IsCubicLight() ? globalImages->whiteImage : d.lightImage);
-		if ( l->lightShader->IsCubicLight() ) Bind(base+1, d.lightImage);
+		Bind(base+1, l->lightShader->IsCubicLight() ? d.lightImage : globalImages->whiteCubeMapImage);
 		Bind(base+2, d.lightFalloffImage);
-		if ( ambientDiffuse ) Bind(base+3, ambientDiffuse);
-		if ( ambientSpecular ) Bind(base+4, ambientSpecular);
+		Bind(base+3, ambientDiffuse ? ambientDiffuse : globalImages->whiteCubeMapImage);
+		Bind(base+4, ambientSpecular ? ambientSpecular : globalImages->blackCubeMapImage);
+	}
+	if ( batch.count == 1 ) {
+		// GLES considers every active sampler, even in a uniform-disabled branch.
+		// Never inherit incomplete textures or a render target from an earlier
+		// pass in the unused second light slot.
+		Bind(9, globalImages->whiteImage);
+		Bind(10, globalImages->whiteCubeMapImage);
+		Bind(11, globalImages->whiteImage);
+		Bind(12, globalImages->whiteCubeMapImage);
+		Bind(13, globalImages->blackCubeMapImage);
 	}
 	u->lightCount.Set(batch.count);
 	u->lightFlags.SetArray(batch.count, lightFlags);
@@ -504,6 +514,8 @@ void MobileLightingStage::Draw( const viewDef_t *view ) {
 	auto it = impl->views.find(view);
 	if ( it == impl->views.end() ) return;
 	TRACE_GL_SCOPE("QuestForwardLighting");
+	frameBuffers->currentRenderFbo->Bind();
+	FB_ApplyViewport();
 	impl->lighting->Activate();
 	auto u = impl->lighting->GetUniformGroup<LightingUniforms>();
 	u->normalTexture.Set(0); u->diffuseTexture.Set(1); u->specularTexture.Set(2); u->parallaxTexture.Set(3);

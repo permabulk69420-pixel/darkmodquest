@@ -349,7 +349,12 @@ GLuint GLSLProgram::CompileShader( GLint shaderType, const char *sourceFile, con
     // Lowering these to mediump breaks depth comparisons and loses flag bits.
     const bool IsMobileShader = idStr(sourceFile).Find("stages/mobile/") == 0
         || nameStr == "volumetric.vs" || nameStr == "volumetric_raymarching.fs";
-    if(harm_r_useMediumPrecision.GetBool() && !IsMobileShader)
+    // The depth prepass and the interaction passes compare with GL_EQUAL.
+    // They must transform the same vertices at the same precision, including
+    // when the launcher's medium-precision option is enabled. Interaction
+    // shaders already retain highp floats, as does the Quest forward shader.
+    const bool IsDepthShader = idStr(sourceFile).Find("stages/depth/") == 0;
+    if(harm_r_useMediumPrecision.GetBool() && !IsMobileShader && !IsDepthShader)
     {
         if(!IsInteractionShader)
         {

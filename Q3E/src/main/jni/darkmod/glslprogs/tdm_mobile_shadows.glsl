@@ -24,7 +24,19 @@ float mobileShadow(highp sampler2D atlas, vec4 page, vec4 params, mat4 projectio
     if (params.z != 0.0) {
         p = (projection * vec4(worldPosition, 1.0)).xyz * 0.5 + 0.5;
         if (any(lessThan(p, vec3(0.0))) || any(greaterThan(p, vec3(1.0)))) return 1.0;
-        reference = p.z - 0.0002;
+        // Depth is sampled at a shadow texel centre, not at this fragment's
+        // exact position. A fixed depth epsilon self-shadows sloped surfaces
+        // at mobile atlas resolutions. Transform the geometric plane normal
+        // by the inverse transpose of the orthographic projection, and cover
+        // the maximum receiver-depth change across the sampling footprint.
+        vec3 x = vec3(projection[0].x, projection[1].x, projection[2].x);
+        vec3 y = vec3(projection[0].y, projection[1].y, projection[2].y);
+        vec3 z = vec3(projection[0].z, projection[1].z, projection[2].z);
+        vec3 n = vec3(dot(worldNormal, x), dot(worldNormal, y), dot(worldNormal, z))
+            / max(vec3(dot(x, x), dot(y, y), dot(z, z)), vec3(1e-20));
+        float slope = (abs(n.x) + abs(n.y)) / max(abs(n.z), 1e-8);
+        float footprint = (filterShadow ? 1.0 : 0.5) * page.w / page.z;
+        reference = p.z - max(0.0002, slope * footprint);
     } else {
         vec3 fromLight = worldPosition - lightOrigin;
         p = mobileCubeUV(fromLight, face);

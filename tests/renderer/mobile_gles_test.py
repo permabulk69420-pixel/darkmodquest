@@ -112,20 +112,24 @@ class GLES:
             self.fn('glTexImage2D',None,C.c_uint,C.c_int,C.c_int,C.c_int,C.c_int,C.c_int,C.c_uint,C.c_uint,C.c_void_p)(
                 0x8515+face if cube else target,0,0x81A6 if depth else 0x8058,size,size,0,0x1902 if depth else 0x1908,0x1405 if depth else 0x1401,data)
         return texture
-    def target(self, width=16, height=16, depth_texture=None):
+    def target(self, width=16, height=16, depth_texture=None, depth_buffer=False):
         fbo=self.gen('glGenFramebuffers'); self.call('glBindFramebuffer',0x8D40,fbo)
         tex=depth_texture or self.texture(0,size=1)
         if not depth_texture:
             self.fn('glTexImage2D',None,C.c_uint,C.c_int,C.c_int,C.c_int,C.c_int,C.c_int,C.c_uint,C.c_uint,C.c_void_p)(0x0DE1,0,0x8058,width,height,0,0x1908,0x1401,None)
         self.call('glFramebufferTexture2D',0x8D40,0x8D00 if depth_texture else 0x8CE0,0x0DE1,tex,0)
+        if depth_buffer:
+            rb=self.gen('glGenRenderbuffers');self.call('glBindRenderbuffer',0x8D41,rb)
+            self.call('glRenderbufferStorage',0x8D41,0x88F0,width,height)
+            self.call('glFramebufferRenderbuffer',0x8D40,0x821A,0x8D41,rb)
         if depth_texture:
             none=(C.c_uint*1)(0); self.call('glDrawBuffers',1,none); self.call('glReadBuffer',0)
         assert self.fn('glCheckFramebufferStatus',C.c_uint,C.c_uint)(0x8D40)==0x8CD5
         return fbo
-    def quad(self,z=-4.0):
+    def quad(self,z=-4.0,span=10.0):
         vao=self.gen('glGenVertexArrays'); self.call('glBindVertexArray',vao)
         buffer=self.gen('glGenBuffers'); self.call('glBindBuffer',0x8892,buffer)
-        points=[(-10,-10),(10,-10),(10,10),(-10,-10),(10,10),(-10,10)]
+        points=[(-span,-span),(span,-span),(span,span),(-span,-span),(span,span),(-span,span)]
         data=(C.c_float*30)(*[v for x,y in points for v in (x,y,z,0.5,0.5)])
         self.fn('glBufferData',None,C.c_uint,C.c_ssize_t,C.c_void_p,C.c_uint)(0x8892,C.sizeof(data),data,0x88E4)
         for loc,size,offset in ((0,3,0),(8,2,12)):
@@ -204,6 +208,33 @@ class MobileShaderTests(unittest.TestCase):
         g.call('glClearColor',0.,0.,0.,0.);g.call('glClear',0x00004000)
         g.uniform(self.forward,'u_clipPlane',[0.,0.,0.,-1.]);g.call('glDrawArrays',4,0,6)
         self.assertEqual(g.pixel(),[0,0,0,0])
+    def test_forward_matches_real_depth_prepass(self):
+        g=self.gl
+        depth=g.program(source('stages/depth/depth.vert.glsl'),source('stages/depth/depth.frag.glsl'))
+        # Nonintegral positions expose depth rounding that an identity plane
+        # at z=-4 hides. Exercise both asymmetric eye projections and distant
+        # geometry, with the real separate shader programs and GL_EQUAL.
+        for eye in (-0.03125,0.03125):
+            for z in (-4.123,-24.3,-4000.7):
+                with self.subTest(eye=eye,z=z):
+                    self.setup_forward(eye=eye)
+                    g.target(depth_buffer=True);g.texture(0,(128,128,255,255))
+                    g.call('glEnable',0x0B71);g.call('glDepthMask',1);g.call('glDepthFunc',0x0201)
+                    g.call('glClearDepthf',1.);g.call('glClearColor',0.,0.,0.,0.);g.call('glClear',0x4100)
+                    projection=PROJECTION.copy();projection[8]=eye
+                    model_view=IDENTITY.copy();model_view[12]=-eye;model_view[14]=-0.4375
+                    g.call('glUseProgram',depth)
+                    for name in ('modelMatrix','textureMatrix'):g.uniform(depth,'u_'+name,IDENTITY,'m')
+                    g.uniform(depth,'u_modelViewMatrix',model_view,'m')
+                    g.uniform(depth,'u_projectionMatrix',projection,'m')
+                    g.uniform(depth,'u_clipPlane',[0.,0.,0.,0.]);g.uniform(depth,'u_alphaTest',-1.)
+                    g.uniform(depth,'u_color',[0.,0.,0.,1.]);g.quad(z=z,span=-2*z);g.call('glDrawArrays',4,0,6)
+                    self.assertEqual(g.pixel()[:3],[0,0,0])
+                    g.call('glUseProgram',self.forward)
+                    g.uniform(self.forward,'u_modelViewMatrix',model_view,'m')
+                    g.uniform(self.forward,'u_projectionMatrix',projection,'m')
+                    g.call('glDepthFunc',0x0202);g.call('glDepthMask',0);g.call('glDrawArrays',4,0,6)
+                    self.assertGreater(g.pixel()[0],10)
     def test_volumetric_shader_links_with_mobile_shadows(self):
         self.gl.program(source('volumetric.vs'),source('volumetric_raymarching.fs'))
     def test_shadow_depth_and_local_caster_mask(self):
@@ -220,9 +251,9 @@ class MobileShaderTests(unittest.TestCase):
         g.call('glViewport',16,16,16,16);g.quad(z=4.);g.call('glDrawArrays',0x0004,0,6)
         vs='#version 320 es\nprecision highp float; in vec4 attr_Position; void main(){ gl_Position=vec4(attr_Position.xy,0,1); }'
         fs='#version 320 es\nprecision highp float; precision highp int;\n'+source('tdm_mobile_shadows.glsl')+'''
-        uniform highp sampler2D atlas; uniform vec3 world; uniform vec4 params; uniform int filtered;
+        uniform highp sampler2D atlas; uniform vec3 world, receiverNormal; uniform vec4 params; uniform int filtered, useReceiverNormal;
         out vec4 color;
-        void main(){float s=mobileShadow(atlas,vec4(0,0,0.25,1.0/64.0),params,mat4(1),world,vec3(0),normalize(-world),filtered!=0); color=vec4(s,s,s,1);}
+        void main(){float s=mobileShadow(atlas,vec4(0,0,0.25,1.0/64.0),params,mat4(1),world,vec3(0),useReceiverNormal!=0?receiverNormal:normalize(-world),filtered!=0); color=vec4(s,s,s,1);}
         '''
         p=g.program(vs,fs);g.target();g.call('glUseProgram',p);g.call('glViewport',0,0,16,16);g.call('glDisable',0x0B71)
         g.call('glActiveTexture',0x84C0+14);g.call('glBindTexture',0x0DE1,depth);g.uniform(p,'atlas',14,'i')
@@ -267,6 +298,24 @@ class MobileShaderTests(unittest.TestCase):
         g.uniform(p,'params',[1.,0.,1.,1.]);g.uniform(p,'world',[0.,0.,0.8]);g.quad();g.call('glDrawArrays',4,0,6)
         self.assertLess(g.pixel()[0],5)
         g.uniform(p,'world',[0.,0.,-0.8]);g.call('glDrawArrays',4,0,6);self.assertGreater(g.pixel()[0],250)
+        # A sloped directional-light receiver samples another point on its
+        # own plane at a shadow texel centre. This must remain fully lit for
+        # both hard shadows and PCF, while a separate receiver stays occluded.
+        g.call('glBindFramebuffer',0x8D40,target);g.call('glDepthMask',1)
+        g.call('glClear',0x00000100);g.call('glEnable',0x0B71);g.call('glUseProgram',self.shadow)
+        model=IDENTITY.copy();model[2]=0.8
+        g.uniform(self.shadow,'u_modelMatrix',model,'m');g.call('glViewport',0,0,16,16)
+        g.quad(z=0.,span=1.);g.call('glDrawArrays',4,0,6)
+        g.target();g.call('glViewport',0,0,16,16);g.call('glDisable',0x0B71);g.call('glUseProgram',p)
+        g.uniform(p,'useReceiverNormal',1,'i');g.uniform(p,'receiverNormal',[-0.8,0.,1.])
+        g.quad()
+        for filtered in (0,1):
+            g.uniform(p,'filtered',filtered,'i')
+            for x in (0.07,0.19,-0.43):
+                g.uniform(p,'world',[x,0.,0.8*x]);g.call('glDrawArrays',4,0,6)
+                self.assertGreater(g.pixel()[0],250,(filtered,x))
+            g.uniform(p,'world',[0.07,0.,0.8]);g.call('glDrawArrays',4,0,6)
+            self.assertLess(g.pixel()[0],5)
 
 if __name__=='__main__':
     os.environ.setdefault('EGL_PLATFORM','surfaceless')
