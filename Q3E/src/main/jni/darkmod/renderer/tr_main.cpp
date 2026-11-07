@@ -17,18 +17,29 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #pragma hdrstop
 
 #include "renderer/tr_local.h"
+#include "renderer/FrameAllocCache.h"
 #include <math.h>
 
 //====================================================================
 
 static const unsigned int NUM_FRAME_DATA = 2;
-static const unsigned int FRAME_ALLOC_ALIGNMENT = 128;
+static const unsigned int FRAME_ALLOC_ALIGNMENT = FrameAllocCache::Alignment;
 static const unsigned int MAX_FRAME_MEMORY = 64 * 1024 * 1024;	// larger so that we can noclip on PC for dev purposes
+idCVar r_frameAllocChunks("r_frameAllocChunks", "1", CVAR_RENDERER | CVAR_BOOL,
+	"Reserve frame memory in per-worker blocks to reduce frontend atomic contention; set in launcher");
+// Only the frontend owner resets the arena, after its model jobs have joined.
+// Keep this monotonic across frame-data recreation as well as buffer rotation.
+static uint64_t frameAllocationEpoch = 0;
 
 frameData_t		smpFrameData[NUM_FRAME_DATA];
 frameData_t 	*frameData;
 frameData_t		*backendFrameData;
 unsigned int	smpFrame;
+
+void R_ResetFrameAlloc(int bytes) {
+	frameData->frameMemoryAllocated.store(bytes, std::memory_order_relaxed);
+	++frameAllocationEpoch;
+}
 
 /*
 ======================
@@ -237,7 +248,7 @@ void R_ToggleSmpFrame( void ) {
 	const uintptr_t bytesNeededForAlignment = FRAME_ALLOC_ALIGNMENT - ( ( uintptr_t )frameData->frameMemory & ( FRAME_ALLOC_ALIGNMENT - 1 ) );
 	// RB end
 
-	frameData->frameMemoryAllocated = bytesNeededForAlignment;
+	R_ResetFrameAlloc(bytesNeededForAlignment);
 	frameData->frameMemoryUsed = 0;
 	frameData->render2D = false;
 	frameData->questGameMsec = frameData->questFrontendMsec = 0;
@@ -363,7 +374,18 @@ Should part of this be inlined in a macro?
 ================
 */
 void *R_FrameAlloc( int bytes ) {
+	if (bytes < 0 || bytes > int(MAX_FRAME_MEMORY)) {
+		idLib::Error("R_FrameAlloc invalid size: %d\n", bytes);
+		return nullptr;
+	}
 	bytes = ( bytes + FRAME_ALLOC_ALIGNMENT - 1 ) & ~( FRAME_ALLOC_ALIGNMENT - 1 );
+	if (r_frameAllocChunks.GetBool()) {
+		byte *ptr = FrameAllocCache::Local().Allocate(frameData->frameMemoryAllocated, frameData->frameMemory,
+			MAX_FRAME_MEMORY, frameAllocationEpoch, bytes);
+		if (!ptr) idLib::Error("R_FrameAlloc ran out of memory. bytes = %d, highWaterAllocated = %d\n",
+			bytes, frameData->memoryHighwater);
+		return ptr;
+	}
 
 	// thread safe add
 	int	end = frameData->frameMemoryAllocated += bytes;

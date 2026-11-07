@@ -2199,6 +2199,9 @@ public class GameLauncher extends Activity
 		SetupVRSpinner(V.vr_hud_offset, R.array.vr_hud_offset_values, Q3EPreference.pref_vr_hud_offset, -20);
 
 		final SharedPreferences vrPrefs = PreferenceManager.getDefaultSharedPreferences(this);
+		V.vr_frame_memory.setChecked(vrPrefs.getBoolean(Q3EPreference.pref_vr_frame_memory, true));
+		V.vr_frame_memory.setOnCheckedChangeListener((button, checked) ->
+			vrPrefs.edit().putBoolean(Q3EPreference.pref_vr_frame_memory, checked).commit());
 		V.vr_framebuffer_optimizations.setChecked(vrPrefs.getBoolean(Q3EPreference.pref_vr_framebuffer_optimizations, true));
 		V.vr_framebuffer_optimizations.setOnCheckedChangeListener((button, checked) ->
 			vrPrefs.edit().putBoolean(Q3EPreference.pref_vr_framebuffer_optimizations, checked).commit());
@@ -5120,6 +5123,7 @@ public class GameLauncher extends Activity
 		public CheckBox vr_fog;
 		public CheckBox vr_renderer_diagnostics;
 		public CheckBox vr_framebuffer_optimizations;
+		public CheckBox vr_frame_memory;
 		public CheckBox vr_mixed_precision;
 		public LinearLayout fteqw_section;
 		public RadioGroup fteqw_vid_renderer;
@@ -5340,6 +5344,7 @@ public class GameLauncher extends Activity
 			vr_resolution_scale = findViewById(R.id.vr_resolution_scale);
 			vr_foveation = findViewById(R.id.vr_foveation);
 			vr_framebuffer_optimizations = findViewById(R.id.vr_framebuffer_optimizations);
+			vr_frame_memory = findViewById(R.id.vr_frame_memory);
 			vr_mixed_precision = findViewById(R.id.vr_mixed_precision);
 			vr_refresh_rate = findViewById(R.id.vr_refresh_rate);
 			vr_hud_height = findViewById(R.id.vr_hud_height);

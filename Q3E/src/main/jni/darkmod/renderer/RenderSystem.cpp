@@ -16,6 +16,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #pragma hdrstop
 
 #include "renderer/tr_local.h"
+#include "renderer/FrameAllocCache.h"
 #include "renderer/backend/FrameBuffer.h"
 #include "renderer/backend/RenderBackend.h"
 #include "renderer/backend/FrameBufferManager.h"
@@ -291,7 +292,7 @@ void R_LockSurfaceScene( viewDef_t &parms ) {
 	cmd = (drawSurfsCommand_t*) R_GetCommandBuffer( sizeof( *cmd ) );
 	cmd->commandId = RC_DRAW_VIEW;
 	cmd->viewDef = &lockSurfView;
-	frameData->frameMemoryAllocated = lockFrameReserve;
+	R_ResetFrameAlloc(lockFrameReserve);
 
 	// set the matrix for world space to eye space
 	R_SetViewMatrix( parms );

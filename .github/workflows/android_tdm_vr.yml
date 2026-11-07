@@ -6,8 +6,8 @@
 #     (so ordinary pushes do not spend CI minutes)
 #   - manual "Run workflow" (needs this file to exist on the default branch)
 #
-# Simple phone download: Releases -> Quest 3 - Rendering Fix and Controls.
-# APK filename: TDM-Quest3-Rendering-Fix-Controls.apk (also inside the Actions artifact).
+# Simple phone download: Releases -> Quest 3 - Frontend Memory Update.
+# APK filename: TDM-Quest3-Frontend-Memory-Update.apk (also inside the Actions artifact).
 
 name: Android APK - TDM only (arm64)
 
@@ -53,6 +53,7 @@ jobs:
         python3 bin/pack_tdm_shaders.py --check
         python3 tests/renderer/shader_install_test.py
         python3 tests/renderer/vr_settings_test.py
+        python3 tests/renderer/frame_alloc_test.py
         python3 tests/renderer/shader_preprocess_test.py
         python3 tests/renderer/multiview_program_test.py
         python3 tests/renderer/gles_loader_test.py
@@ -74,13 +75,13 @@ jobs:
     - name: Collect APK
       run: |
         mkdir -p out
-        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest3-Rendering-Fix-Controls.apk"
+        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest3-Frontend-Memory-Update.apk"
         ls -la out
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Quest3-Rendering-Fix-Controls-APK
+        name: Quest3-Frontend-Memory-Update-APK
         path: out/*.apk
         if-no-files-found: error
         retention-days: 30
@@ -90,12 +91,12 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        tag=quest-rendering-fix-controls
-        apk=out/TDM-Quest3-Rendering-Fix-Controls.apk
-        notes="Quest 3 ARM64 rendering fixes and comparison controls. Foveation now prepares and retains shading-rate attachments before scene depth instead of changing them between depth and lighting. Lighting and its shared parallax helper reconstruct screen coordinates to avoid a documented EXT VRS full-rate condition. Mixed precision now includes bounded RGB lighting weights, with brightness restored at full precision; positions, shadows, HDR samples, accumulation and the gameplay lightgem retain full precision. Launcher checkboxes independently enable optimized framebuffer copies and mixed-precision lighting; disabling either selects its original path. The existing renderer diagnostics overlay reports actual depth copies, direct tonemaps, depth discards and shading-rate target updates. Shader update 13 replaces the installed sources. Android ARM64 builds and production GLES pixel/controller checks pass. Quest FPS improvement has not been measured. Eye resolution, tracking and controls are unchanged. Source commit: ${GITHUB_SHA} (branch ${GITHUB_REF_NAME})."
+        tag=quest-frontend-memory-update
+        apk=out/TDM-Quest3-Frontend-Memory-Update.apk
+        notes="Quest 3 ARM64 CPU frontend update. Small render-data allocations now come from per-worker 16 KiB reservations, reducing shared atomic-counter contention during parallel model/light preparation. The existing arena size and 128-byte alignment are preserved; frame recycling and debug rewinds invalidate worker caches. Android ARM64 code uses one emulated-TLS lookup, avoiding compiler-generated lookups for each cache field. The launcher setting Scene memory optimization defaults on; switch it off to restore the original shared per-request allocator. The existing renderer diagnostics overlay shows the selected allocator and reserved frame memory. Production allocator tests cover eight-worker isolation, persistent workers across both frame buffers, near-capacity allocation, alignment, resets and data preservation under address/undefined-behavior sanitizers. Repeated allocator-only local timings, including emulated TLS with the pinned NDK compiler, improve; this is not a measured Quest FPS gain. Includes the earlier rendering/foveation fixes and controls. Eye resolution, rendering equations and OpenXR integration are unchanged. Source commit: ${GITHUB_SHA} (branch ${GITHUB_REF_NAME})."
         if gh release view "$tag" >/dev/null 2>&1; then
           gh release upload "$tag" "$apk" --clobber
-          gh release edit "$tag" --title "Quest 3 - Rendering Fix and Controls" --notes "$notes" --latest
+          gh release edit "$tag" --title "Quest 3 - Frontend Memory Update" --notes "$notes" --latest
         else
-          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 - Rendering Fix and Controls" --notes "$notes" --latest
+          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 - Frontend Memory Update" --notes "$notes" --latest
         fi

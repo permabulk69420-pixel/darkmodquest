@@ -187,6 +187,42 @@ Actual Quest rate results, visual quality and FPS gains remain device measuremen
 
 ## Frame work
 
+Small frontend allocations use `FrameAllocCache`: each worker reserves a 16 KiB
+range in the existing frame arena, then bumps its own cursor without a shared
+atomic update per draw surface. This reduces contention while model/light jobs
+run in parallel. The launcher **Scene memory optimization** checkbox controls
+`r_frameAllocChunks`; off restores the original shared per-request allocator.
+The existing overlay reports the selected path and reserved frame KiB.
+
+The arena remains 64 MiB with 128-byte allocation alignment. Large allocations
+reserve their exact size. Near-capacity reservations shrink to the available
+aligned range. Worker cursors are invalidated on frame recycling, arena
+recreation and `r_lockSurfaces` debug rewinds. Unused range tails cost less than
+16 KiB per participating worker in a frame. Backend-frame data remains alive
+while the other arena is reused by persistent frontend workers.
+
+NDK r23 on Android API 21 uses emulated TLS. The non-inlined `Local()` accessor
+keeps the cache as one object; ARM64 disassembly verifies a single TLS lookup
+instead of LLVM splitting its four fields into separate lookups. The production
+allocator is exercised with persistent eight-worker/two-arena tests, alignment,
+zero/large requests, failure recovery and resets under ASan/UBSan. The benchmark
+uses the preserved old allocator body and alternates both implementations; it
+is separate from the sanitizer run.
+
+With the pinned NDK compiler and emulated TLS on the local x86 host, six pairs of
+an allocator-only workload measured four-worker medians of about 175 ms for the
+old path and 29 ms for the block path. These are totals for 25 batches of 30,000
+requests per worker, including thread startup/join, not game-frame times. The
+single-worker medians were about 27 ms and 16 ms. These results measure this
+CPU mechanism; they do not establish a Quest FPS gain. Run explicitly with:
+
+```bash
+python3 tests/renderer/frame_alloc_test.py --benchmark
+python3 tests/renderer/frame_alloc_test.py \
+  --cxx /path/to/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++ \
+  --emulated-tls --skip-sanitizers --benchmark
+```
+
 Before either eye replay, `MobileLightingStage` walks the recorded views once:
 
 1. Evaluate the existing material interaction groups, including conditions,

@@ -1407,6 +1407,7 @@ void OpenXRBackend::Impl::UpdateDiagnostics( const frameData_t *fd ) {
 		"%s\n%s"
 		"CPU ms: game %d | frontend %d | XR wait %.1f | SMP %s\n"
 		"Render CPU ms: prep %.1f | depth %.1f | light %.1f\n"
+		"Frame allocation: %s | reserved %d KiB\n"
 		"Framebuffer copies: %s | depth %d | direct tone %d | discarded %d\n"
 		"Lighting precision: %s | positions/shadows/lightgem FULL\n"
 		"Views: main %d sky %d mirror %d other %d | camera reuse %d\n"
@@ -1424,6 +1425,8 @@ void OpenXRBackend::Impl::UpdateDiagnostics( const frameData_t *fd ) {
 		timing, mobile,
 		fd->questGameMsec, fd->questFrontendMsec, timer.WaitMs(), com_smp.GetBool() ? "ON" : "OFF",
 		c.prepareCpuMs, c.depthCpuMs, c.lightingCpuMs,
+		cvarSystem->GetCVarBool("r_frameAllocChunks")?"PER-WORKER 16 KiB":"SHARED per request",
+		fd->frameMemoryAllocated.load(std::memory_order_relaxed)/1024,
 		R_QuestFramebufferOptimizations()?"OPTIMIZED":"BASELINE",c.sceneDepthCopies,c.directTonemaps,c.depthDiscards,
 		cvarSystem->GetCVarBool("r_questMixedPrecision")?"MIXED weights":"FULL",
 		mainViews, skyViews, mirrorViews, otherViews, int(reusedCameraCommands.size()/2),
