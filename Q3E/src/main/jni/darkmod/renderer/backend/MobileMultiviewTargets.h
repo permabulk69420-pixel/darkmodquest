@@ -19,6 +19,8 @@ public:
 	void BindScene();
 	FrameBuffer *Layered() const;
 	GLuint SSAOTexture() const;
+	GLuint ColorTexture() const;
+	bool CanTonemapDirectly() const;
 	bool IsPerEyeImage(idImage *image) const;
 private:
 	struct Impl;

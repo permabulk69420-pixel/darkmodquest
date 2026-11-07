@@ -69,13 +69,7 @@ extern "C" int validate_pipeline(GLuint lightingProgram,GLuint depthProgram,GLui
  glEnable(GL_DEPTH_TEST);glDepthMask(GL_TRUE);glDepthFunc(GL_LESS);glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
  glClearColor(0,0,0,1);glClearDepthf(1);glClearStencil(128);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT|GL_STENCIL_BUFFER_BIT);
  glUseProgram(depthProgram);glDrawArrays(GL_TRIANGLES,0,6);
- // Match the scheduler's per-eye depth captures before it resumes shared lighting.
- for(int eye=0;eye<2;++eye){
-  targets.SelectEye(eye);manager.currentRenderFbo=manager.primaryFbo;manager.primaryFbo->Bind();manager.resolveFbo->Bind();
-  glBindFramebuffer(GL_READ_FRAMEBUFFER,manager.primaryFbo->fbo);
-  glBindFramebuffer(GL_DRAW_FRAMEBUFFER,manager.resolveFbo->fbo);
-  glBlitFramebuffer(0,0,16,16,0,0,16,16,GL_DEPTH_BUFFER_BIT,GL_NEAREST);manager.primaryFbo->Bind();
- }
+ targets.SelectEye(1);manager.currentRenderFbo=manager.primaryFbo;manager.primaryFbo->Bind();
  if(oldBinding)targets.Layered()->Bind();else targets.BindScene();
  viewDef_t view;backEnd.viewDef=&view;MobileStereoView stereo;stereo.ssaoTexture=targets.SSAOTexture();
  Light light;MobileLightingStage::Impl impl;impl.program=lightingProgram;
@@ -86,9 +80,16 @@ extern "C" int validate_pipeline(GLuint lightingProgram,GLuint depthProgram,GLui
  if(result==GL_NO_ERROR){
   for(int eye=0;eye<2;++eye){
    targets.SelectEye(eye);manager.currentRenderFbo=manager.primaryFbo;manager.primaryFbo->Bind();
+   // Shipping SSAO-off order: capture depth after lighting, before effects.
+   manager.resolveFbo->Bind();
+   glBindFramebuffer(GL_READ_FRAMEBUFFER,manager.primaryFbo->fbo);
+   glBindFramebuffer(GL_DRAW_FRAMEBUFFER,manager.resolveFbo->fbo);
+   glBlitFramebuffer(0,0,16,16,0,0,16,16,GL_DEPTH_BUFFER_BIT,GL_NEAREST);manager.primaryFbo->Bind();
    glDisable(GL_SCISSOR_TEST);glDisable(GL_STENCIL_TEST);glUseProgram(materialProgram);
    glEnable(GL_DEPTH_TEST);glDepthFunc(GL_EQUAL);glDepthMask(GL_FALSE);glEnable(GL_BLEND);glBlendFunc(GL_ONE,GL_ONE);
    glDrawArrays(GL_TRIANGLES,0,6);
+   // Discarding this eye must preserve colour and the other eye's depth.
+   manager.primaryFbo->InvalidateDepthStencil();
    glReadPixels(0,0,16,16,GL_RGBA,GL_UNSIGNED_BYTE,pixels+eye*16*16*4);
   }
  }
@@ -109,7 +110,7 @@ class MultiviewPipelineTests(unittest.TestCase):
                 for name in ('GLES3/gl32.h','GLES3/gl3platform.h','KHR/khrplatform.h'):
                     target=base/name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(headers/name,target)
                 attachments='\n'.join(method(ENGINE/'renderer/backend/FrameBuffer.cpp',signature) for signature in (
-                    'void FrameBuffer::AddArrayLayer(', 'void FrameBuffer::AddMultiviewTextures('))
+                    'void FrameBuffer::AddArrayLayer(', 'void FrameBuffer::AddMultiviewTextures(', 'void FrameBuffer::InvalidateDepthStencil('))
                 generate=method(ENGINE/'renderer/resources/Image_load.cpp','void idImageScratch::GenerateAttachment(')
                 draw=method(ENGINE/'renderer/backend/stages/MobileLightingStage.cpp','void MobileLightingStage::Draw(')
                 names=set(re.findall(r'\bqgl(\w+)',TARGETS.read_text()+attachments+generate+draw))

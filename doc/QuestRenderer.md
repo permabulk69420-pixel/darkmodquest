@@ -18,7 +18,7 @@ at those declarations; passing a dictionary entry alone does not define it.
 Earlier APKs omitted these declarations, linked ordinary one-eye shaders and
 then attempted two-eye matrix uploads. Shader-link success and the submitted
 multiview draw count could therefore accompany missing geometry and lighting.
-The installed shader version is now 11, forcing replacement of older sources.
+The installed shader version is now 12, forcing replacement of older sources.
 Before selecting the multiview path, the renderer verifies second-eye modelview,
 projection and lighting-origin uniform locations for every program. Incompatible
 programs retain separate-eye rendering. Checks are cached by shader generation
@@ -43,6 +43,51 @@ resizing and retirement invalidate that storage. SSAO remains computed per eye,
 then copied into matching array layers for multiview lighting. Ordinary material,
 refraction, fog, volumetric and post-processing passes retain eye-specific draws;
 this does not claim every rendering pass has been converted to multiview.
+
+## Tile memory, copies and precision
+
+With SSAO off, shared scene depth and lighting are consecutive draws to the same
+layered framebuffer. Per-eye depth capture now runs after lighting, immediately
+before the eye's material/effect passes. Soft particles and refraction still
+receive current-view depth. With SSAO enabled, depth capture and AO stay before
+lighting because ambient lighting needs their results. Captures and subview
+ordering remain unchanged.
+
+After each eye's material/effect passes finish, the scheduler invalidates only
+that eye's primary depth and stencil attachments, before leaving the target.
+The resolved depth texture remains intact for readers, and colour remains valid
+for captures, bloom and tonemapping. The next world view clears its own depth.
+The GLES core loader now exposes and loads framebuffer invalidation independently
+of the desktop ARB extension. Real GLES checks discard one eye's depth while the
+other eye still needs it, verifying both resulting colour images.
+
+At matching scene/output dimensions, tonemapping can sample an eye layer directly
+from the existing colour array into the OpenXR eye swapchain. The intermediate
+primary-to-GUI colour blit is removed. Both sampler types explicitly use high
+precision. Sharpening, compression, gamma and dithering use the same shader body.
+Bloom-produced images retain their existing path; explicit FBO scaling retains
+the original resampling/CAS order. Stale or failed array programs fall back to
+the 2D path, with interface checks cached by program generation. Forced black
+output needs no scene copy. HUD rendering remains in its separate XR layer.
+
+The scene BRDF uses mediump only for bounded normalized directions, diffuse
+angular terms, Fresnel/rim factors and vertex-colour lighting weights. Direction
+normalization, glossy half-vector dot/power, positions, transforms, shadow
+coordinates/tests, parallax, HDR/material colours and light accumulation retain
+high precision. The blanket mobile/depth precision exemption remains in place.
+The gameplay lightgem selects dedicated full-precision variants using the
+original interaction equations, hard-shadow policy and gamma handling.
+
+`mobile_bandwidth_gles_test.py` compares direct array tonemapping against the
+actual colour-blit/2D path for both eyes and postprocess settings. Its BRDF checks
+compare the mixed shader, original equations and an additional variant with
+explicit half-float assignment rounding. Across the fixed lighting/view/normal
+cases, the maximum observed colour difference is 1/255. This does not guarantee
+identical Quest driver precision or establish GPU cycle savings. Production
+scheduler fixtures check capture/effect/discard order with SSAO on/off, direct
+output, bloom, scaling, shader rejection and forced-black output. Android ARM64
+link checks and real GLES multiview/depth/material tests pass. On-headset FPS
+improvement remains unmeasured; eye resolution is unchanged.
 
 ## Fixed foveation
 

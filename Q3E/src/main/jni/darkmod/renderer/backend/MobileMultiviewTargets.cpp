@@ -204,4 +204,9 @@ void MobileMultiviewTargets::Shutdown(){
 }
 FrameBuffer *MobileMultiviewTargets::Layered()const{return impl->layered;}
 GLuint MobileMultiviewTargets::SSAOTexture()const{return impl->ssao;}
+GLuint MobileMultiviewTargets::ColorTexture()const{return impl->color;}
+bool MobileMultiviewTargets::CanTonemapDirectly()const{
+	// Preserve the old resampling/CAS order if an explicit FBO scale is used.
+	return impl->active&&impl->width==glConfig.vidWidth&&impl->height==glConfig.vidHeight;
+}
 bool MobileMultiviewTargets::IsPerEyeImage(idImage *image)const{return impl->images.count(image)!=0;}

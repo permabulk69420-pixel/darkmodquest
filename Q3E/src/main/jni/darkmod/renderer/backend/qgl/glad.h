@@ -9456,6 +9456,10 @@ GLAPI PFNGLINVALIDATEBUFFERSUBDATAPROC glad_glInvalidateBufferSubData;
 typedef void (APIENTRYP PFNGLINVALIDATEBUFFERDATAPROC)(GLuint buffer);
 GLAPI PFNGLINVALIDATEBUFFERDATAPROC glad_glInvalidateBufferData;
 #define qglInvalidateBufferData glad_glInvalidateBufferData
+#endif
+// Framebuffer invalidation is core in GLES 3.0, independently of the desktop
+// ARB_invalidate_subdata extension and its texture/buffer entry points.
+#if defined(GLAD_COMPILE_LOADER) || GL_ARB_invalidate_subdata || GL_ES_VERSION_3_0
 typedef void (APIENTRYP PFNGLINVALIDATEFRAMEBUFFERPROC)(GLenum target, GLsizei numAttachments, const GLenum *attachments);
 GLAPI PFNGLINVALIDATEFRAMEBUFFERPROC glad_glInvalidateFramebuffer;
 #define qglInvalidateFramebuffer glad_glInvalidateFramebuffer

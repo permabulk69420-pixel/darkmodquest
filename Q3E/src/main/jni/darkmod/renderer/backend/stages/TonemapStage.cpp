@@ -112,6 +112,7 @@ idCVar r_postprocess_dither_output( "r_postprocess_dither_output", "2",
 struct TonemapStage::Uniforms : GLSLUniformGroup {
 	UNIFORM_GROUP_DEF( Uniforms )
 	DEFINE_UNIFORM(sampler, texture)
+	DEFINE_UNIFORM(int, eyeLayer)
 
 	DEFINE_UNIFORM(float, exposure)
 
@@ -138,7 +139,14 @@ struct TonemapStage::Uniforms : GLSLUniformGroup {
 };
 
 void TonemapStage::Init() {
+	arrayCheckedGeneration=0;arrayReady=false;
 	tonemapShader = programManager->LoadFromFiles( "tonemap", "fullscreen_tri.vert.glsl", "stages/tonemap/tonemap.frag.glsl" );
+#ifdef TDM_VR_OPENXR
+	arrayShader=programManager->LoadFromGenerator("quest_scene_tonemap",[](GLSLProgram *program){
+		idHashMapDict defines;defines["QUEST_TONEMAP_ARRAY"]="1";
+		program->LoadFromFiles("fullscreen_tri.vert.glsl","stages/tonemap/tonemap.frag.glsl",defines);
+	});
+#endif
 }
 
 void TonemapStage::Shutdown() {}
@@ -147,6 +155,22 @@ void TonemapStage::ApplyTonemap( FrameBuffer *destinationFbo, idImage *sourceTex
 	if ( !r_tonemap.GetBool() ) {
 		return;
 	}
+	Apply(destinationFbo,sourceTexture,0,0,tonemapShader);
+}
+
+bool TonemapStage::ApplyTonemapArray(FrameBuffer *destinationFbo,GLuint texture,int layer) {
+	if(!r_tonemap.GetBool()||!arrayShader||!arrayShader->EnsureLinked())return false;
+	// Validate the production define before attempting to sample an array with
+	// a stale, ordinary 2D program from an older shader installation.
+	if(arrayCheckedGeneration!=arrayShader->Generation()){
+		arrayCheckedGeneration=arrayShader->Generation();
+		arrayReady=arrayShader->GetUniformLocation("u_eyeLayer")>=0;
+	}
+	if(!arrayReady)return false;
+	Apply(destinationFbo,nullptr,texture,layer,arrayShader);return true;
+}
+
+void TonemapStage::Apply(FrameBuffer *destinationFbo,idImage *sourceTexture,GLuint arrayTexture,int layer,GLSLProgram *shader) {
 	TRACE_GL_SCOPE("Tonemap")
 
 	destinationFbo->Bind();
@@ -156,8 +180,8 @@ void TonemapStage::ApplyTonemap( FrameBuffer *destinationFbo, idImage *sourceTex
 	GL_State( GLS_DEPTHMASK );
 	qglDisable( GL_DEPTH_TEST );
 
-	tonemapShader->Activate();
-	Uniforms *uniforms = tonemapShader->GetUniformGroup<Uniforms>();
+	shader->Activate();
+	Uniforms *uniforms = shader->GetUniformGroup<Uniforms>();
 
 	uniforms->exposure.Set( r_postprocess_exposure.GetFloat() );
 
@@ -205,7 +229,8 @@ void TonemapStage::ApplyTonemap( FrameBuffer *destinationFbo, idImage *sourceTex
 	}
 
 	GL_SelectTexture( 0 );
-	sourceTexture->Bind();
+	if(arrayTexture){qglBindTexture(GL_TEXTURE_2D_ARRAY,arrayTexture);uniforms->eyeLayer.Set(layer);}
+	else sourceTexture->Bind();
 	uniforms->texture.Set( 0 );
 
 	GL_SelectTexture( 1 );

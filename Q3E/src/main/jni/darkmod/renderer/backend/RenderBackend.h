@@ -47,6 +47,7 @@ public:
 	bool PrepareMultiview() { return depthStage.PrepareMultiview()&&mobileLightingStage.PrepareMultiview(); }
 
 	void Tonemap();
+	bool TonemapSceneLayer(GLuint texture,int eye);
 
 private:
 	DepthStage depthStage;

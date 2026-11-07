@@ -88,6 +88,7 @@ namespace {
 const int AMBIENT_LIGHT = 0x100000;
 const int MAX_BATCH_LIGHTS = 8;
 int LightingVariant(int count) { return count<=1 ? 0 : count<=2 ? 1 : count<=4 ? 2 : 3; }
+int LightingProgram(int count,bool stereo,bool lightgem) { return LightingVariant(count)+(lightgem?8:stereo?4:0); }
 
 struct LightingUniforms : GLSLUniformGroup {
 	UNIFORM_GROUP_DEF( LightingUniforms )
@@ -229,8 +230,8 @@ void Bind( int unit, idImage *image ) { image->BindToUnit(unit); }
 
 struct MobileLightingStage::Impl {
 	MobileFoveation foveation;
-	GLSLProgram *lighting[8] = {}, *depth = nullptr;
-	uint64_t drawSerial = 0, configuredSerial[8] = {};
+	GLSLProgram *lighting[12] = {}, *depth = nullptr;
+	uint64_t drawSerial = 0, configuredSerial[12] = {};
 	uint64_t multiviewCheckedGeneration[4] = {};
 	bool multiviewReady[4] = {};
 	const MobileStereoView *stereo = nullptr;
@@ -273,12 +274,13 @@ MobileLightingStage::~MobileLightingStage() = default;
 
 void MobileLightingStage::Init() {
 #ifdef TDM_VR_OPENXR
-	for(int i=0;i<8;++i) {
-		if(i>=4){impl->multiviewCheckedGeneration[i-4]=0;impl->multiviewReady[i-4]=false;}
+	for(int i=0;i<12;++i) {
+		if(i>=4&&i<8){impl->multiviewCheckedGeneration[i-4]=0;impl->multiviewReady[i-4]=false;}
 		const int count=1<<(i%4);
 		const idStr fragment=count==8 ? "stages/mobile/forward.frag.glsl" : va("stages/mobile/forward_%d.frag.glsl",count);
-		impl->lighting[i]=programManager->LoadFromGenerator(va("quest_%sforward_%d",i>=4?"multiview_":"",count),[fragment,i](GLSLProgram *program){
-			idHashMapDict defines;if(i>=4)defines["QUEST_MULTIVIEW"]="1";
+		impl->lighting[i]=programManager->LoadFromGenerator(va("quest_%sforward_%d",i>=8?"lightgem_":i>=4?"multiview_":"",count),[fragment,i](GLSLProgram *program){
+			idHashMapDict defines;if(i>=4&&i<8)defines["QUEST_MULTIVIEW"]="1";
+			if(i>=8)defines["QUEST_FULL_PRECISION_LIGHTING"]="1";
 			program->LoadFromFiles("stages/mobile/forward.vert.glsl",fragment,defines);
 		});
 	}
@@ -875,7 +877,7 @@ void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, ViewPlan &plan
 }
 
 LightingUniforms *MobileLightingStage::Impl::UseLighting(const viewDef_t *view,int count) {
-    const int variant=LightingVariant(count)+(stereo?4:0);
+    const int variant=LightingProgram(count,stereo!=nullptr,view->IsLightGem());
 	if(!lighting[variant]->EnsureLinked())common->Error("Quest lighting shader failed to compile or link");
 	lighting[variant]->Activate();
     auto *u=lighting[variant]->GetUniformGroup<LightingUniforms>();

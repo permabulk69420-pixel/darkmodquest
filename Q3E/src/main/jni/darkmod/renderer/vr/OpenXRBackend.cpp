@@ -1076,8 +1076,10 @@ void OpenXRBackend::Impl::ExecuteMultiview(const frameData_t *fd){
 		if(cmd->commandId==RC_DRAW_VIEW){
 			auto *view=const_cast<viewDef_t *>(((const drawSurfsCommand_t *)cmd)->viewDef);
 			if(!IsWorldView(view))continue;
+			backEnd.viewDef=view;
 			const bool shared=eyes[0].primary&&eyes[1].primary&&renderBackend->MobileLighting().CanDrawMultiview(view,multiview)&&
 				!r_skipRender.GetBool()&&!r_skipRenderContext.GetBool();
+			const bool earlyDepth=shared&&ambientOcclusion->ShouldEnableForCurrentView();
 			MobileStereoView stereo;
 			if(shared){
 				for(int eye=0;eye<2;++eye){
@@ -1087,11 +1089,9 @@ void OpenXRBackend::Impl::ExecuteMultiview(const frameData_t *fd){
 					stereo.origin[eye]=view->renderView.vieworg;
 				}
 				multiview.BindScene();renderBackend->DrawMultiviewDepth(view,eyes[0].background,stereo);
-				for(int eye=0;eye<2;++eye){
+				if(earlyDepth)for(int eye=0;eye<2;++eye){
 					UpdateViewForEye(view,eye,false);select(eye);renderBackend->CaptureDepth(view);
-					if(ambientOcclusion->ShouldEnableForCurrentView()){
-						ambientOcclusion->ComputeSSAOFromDepth();ambientOcclusion->CopySSAOToLayer(multiview.SSAOTexture(),eye);
-					}
+					ambientOcclusion->ComputeSSAOFromDepth();ambientOcclusion->CopySSAOToLayer(multiview.SSAOTexture(),eye);
 					save(eye);
 				}
 				stereo.ssaoTexture=multiview.SSAOTexture();multiview.BindScene();
@@ -1101,7 +1101,15 @@ void OpenXRBackend::Impl::ExecuteMultiview(const frameData_t *fd){
 			for(int eye=0;eye<2;++eye){
 				UpdateViewForEye(view,eye);backEnd.viewDef=view;select(eye);
 				if(eyes[eye].primary)frameBuffers->EnterPrimary();
+				// With SSAO off, lighting needs only the scene depth attachment,
+				// not its texture copy. Keep depth+lighting in one tiled pass;
+				// copy just before soft particles/material effects first need it.
+				if(shared&&!earlyDepth)renderBackend->CaptureDepth(view);
 				renderBackend->DrawView(view,eyes[eye].background,shared);
+				// The next world view clears its own depth. Captured depth lives
+				// in a separate resolve texture; colour/mirror copies still work.
+				if(eyes[eye].primary&&frameBuffers->currentRenderFbo==frameBuffers->primaryFbo)
+					frameBuffers->primaryFbo->InvalidateDepthStencil();
 				eyes[eye].background=view->outputColorIsBackground;save(eye);
 			}
 			GL_CheckErrors();continue;
@@ -1117,9 +1125,14 @@ void OpenXRBackend::Impl::ExecuteMultiview(const frameData_t *fd){
 			case RC_COPY_RENDER:RB_CopyRender(cmd);break;
 			case RC_BLOOM:if(RB_Bloom((bloomCommand_t *)cmd)){FB_DebugShowContents();frameBuffers->LeavePrimary();}break;
 			case RC_TONEMAP:{
-				frameBuffers->LeavePrimary();
-				if(!((const tonemapCommand_t *)cmd)->forceOutputToBlack)renderBackend->Tonemap();
-				else {frameBuffers->defaultFbo->Bind();qglClearColor(0,0,0,0);qglClear(GL_COLOR_BUFFER_BIT);}
+				if(!((const tonemapCommand_t *)cmd)->forceOutputToBlack){
+					const bool direct=frameBuffers->currentRenderFbo==frameBuffers->primaryFbo&&multiview.CanTonemapDirectly()&&
+						renderBackend->TonemapSceneLayer(multiview.ColorTexture(),eye);
+					if(!direct){frameBuffers->LeavePrimary();renderBackend->Tonemap();}
+				}else {
+					frameBuffers->defaultFbo->Bind();GL_ViewportRelative(0,0,1,1);GL_ScissorRelative(0,0,1,1);
+					qglClearColor(0,0,0,0);qglClear(GL_COLOR_BUFFER_BIT);
+				}
 				eyes[eye].primary=false;frameBuffers->tonemapNotYet=false;frameBuffers->LeavePrimary(false);break;
 			}
 			default:common->Error("OpenXR multiview: unexpected command %d",cmd->commandId);break;

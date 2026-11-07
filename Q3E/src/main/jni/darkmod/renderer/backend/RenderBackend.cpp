@@ -383,3 +383,7 @@ void RenderBackend::DrawShadowsAndInteractions( const viewDef_t *viewDef ) {
 void RenderBackend::Tonemap() {
 	tonemapStage.ApplyTonemap( frameBuffers->defaultFbo, globalImages->guiRenderImage );
 }
+
+bool RenderBackend::TonemapSceneLayer(GLuint texture,int eye) {
+	return tonemapStage.ApplyTonemapArray(frameBuffers->defaultFbo,texture,eye);
+}

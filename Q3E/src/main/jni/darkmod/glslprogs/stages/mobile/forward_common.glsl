@@ -10,6 +10,7 @@ layout(early_fragment_tests) in;
 #pragma tdm_include "tdm_utils.glsl"
 #pragma tdm_include "tdm_lightproject.glsl"
 #pragma tdm_include "tdm_interaction.glsl"
+#pragma tdm_include "stages/mobile/brdf.glsl"
 #pragma tdm_include "tdm_compression.glsl"
 #pragma tdm_include "tdm_parallax.glsl"
 #pragma tdm_include "tdm_mobile_shadows.glsl"
@@ -74,7 +75,7 @@ vec4 illuminate(int i, sampler2D projectionTexture, samplerCube projectionCube, 
     }
     vec3 toLight = (worldPosToObject(u_lightOrigin[i], u_modelMatrix) - positionModel) * tangentToModel - scaledOffset;
     InteractionGeometry geom = computeInteractionGeometry(toLight, viewLocal - scaledOffset, normal);
-    vec3 color = computeAdvancedInteraction(geom, u_diffuseColor[i].rgb, diffuseTexel,
+    vec3 color = questAdvancedInteraction(geom, u_diffuseColor[i].rgb, diffuseTexel,
         u_specularColor[i].rgb, specularTexel, vertexColor.rgb, checkFlag(u_flags, SFL_INTERACTION_BUMPMAP_LIGHT_TOGGLING_FIX));
     float parallaxShadow = 1.0;
     if (checkFlag(u_flags, SFL_SURFACE_HAS_PARALLAX_TEXTURE) && u_parallaxIterations.z > 0)

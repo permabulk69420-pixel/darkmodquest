@@ -79,6 +79,8 @@ public:
  void Destroy(){if(fbo)glDeleteFramebuffers(1,&fbo);fbo=0;}
  void Init(int w,int h,int=0){width=w;height=h;glGenFramebuffers(1,&fbo);Bind();}
  void Bind(){if(!fbo&&generator){generator(this);if(glCheckFramebufferStatus(GL_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE)throw std::runtime_error("incomplete real framebuffer");}glBindFramebuffer(GL_FRAMEBUFFER,fbo);}
+ void BindDraw(){if(!fbo&&generator)Bind();glBindFramebuffer(GL_DRAW_FRAMEBUFFER,fbo);}
+ void InvalidateDepthStencil();
  void AddArrayLayer(GLuint,GLuint,int);
  void AddMultiviewTextures(GLuint,GLuint,MultiviewAttachment);
  void AddColorRenderTexture(int attachment,idImage *image){Bind();glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0+attachment,GL_TEXTURE_2D,image->texnum,0);}
@@ -121,6 +123,7 @@ extern "C" const char *validate_targets(){
   MobileMultiviewTargets targets;
   const GLuint original=capture.texnum;
   require(targets.BeginFrame(&command),"multiview failed to activate on supported GLES");
+  require(targets.ColorTexture()!=0&&targets.CanTonemapDirectly(),"matching scene cannot be sampled for direct tonemap");
   targets.Layered()->Bind();require(glCheckFramebufferStatus(GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE,"layered target incomplete");
   GLuint eyeNames[2];
   for(int eye=0;eye<2;++eye){
@@ -158,6 +161,7 @@ extern "C" const char *validate_targets(){
   // Resize both array layers and every lazily generated per-eye attachment.
   manager.renderWidth=24;manager.renderHeight=20;
   require(targets.BeginFrame(&empty),"resized frame failed");targets.Layered()->Bind();
+  require(!targets.CanTonemapDirectly(),"scaled scene bypassed the original resampling order");
   require(targets.Layered()->width==24&&targets.Layered()->height==20,"layered dimensions stale");
   for(int eye=0;eye<2;++eye){targets.SelectEye(eye);manager.primaryFbo->Bind();manager.resolveFbo->Bind();}
   targets.EndFrame();targets.Shutdown();

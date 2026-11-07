@@ -95,6 +95,14 @@ void FrameBuffer::AddArrayLayer(GLuint color, GLuint depthStencil, int layer) {
 	qglFramebufferTextureLayer(GL_FRAMEBUFFER,GL_DEPTH_STENCIL_ATTACHMENT,depthStencil,0,layer);
 }
 
+void FrameBuffer::InvalidateDepthStencil() {
+#ifdef _GLES
+	BindDraw();
+	const GLenum attachments[]={GL_DEPTH_ATTACHMENT,GL_STENCIL_ATTACHMENT};
+	qglInvalidateFramebuffer(GL_DRAW_FRAMEBUFFER,2,attachments);
+#endif
+}
+
 void FrameBuffer::AddMultiviewTextures(GLuint color, GLuint depthStencil, MultiviewAttachment attach) {
 	Bind();
 	attach(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,color,0,0,2);

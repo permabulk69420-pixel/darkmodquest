@@ -7,7 +7,7 @@ from shader_install_test import method
 
 root=Path(__file__).resolve().parents[2]
 stage=root/'Q3E/src/main/jni/darkmod/renderer/backend/stages/MobileLightingStage.cpp'
-functions='\n'.join(method(stage,s) for s in ('bool HasNegativeColor(', 'auto GeometryKey(',
+functions='\n'.join(method(stage,s) for s in ('int LightingVariant(', 'int LightingProgram(', 'bool HasNegativeColor(', 'auto GeometryKey(',
     'bool Compatible(', 'auto LightTextureKey(', 'bool CanAppend('))
 source=r'''
 #include <cassert>
@@ -32,6 +32,9 @@ struct Packet{Interaction inter;const Light *light;bool local=false,translucent=
 struct Batch{const Packet *lights[MAX_BATCH_LIGHTS]={};int count=0;};
 FUNCTIONS
 int main(){
+ for(int count=1;count<=8;++count){const int base=count<=1?0:count<=2?1:count<=4?2:3;
+  assert(LightingProgram(count,false,false)==base&&LightingProgram(count,true,false)==base+4);
+  assert(LightingProgram(count,false,true)==base+8&&LightingProgram(count,true,true)==base+8);}
  Image images[4];Material materials[9];Light lights[9];Packet packets[9];drawSurf_t mesh;
  for(int i=0;i<9;++i){lights[i].lightShader=&materials[i];packets[i].light=&lights[i];packets[i].geometry=&mesh;
   packets[i].inter.surf=&mesh;packets[i].inter.lightImage=&images[i%2];packets[i].inter.lightFalloffImage=&images[2];}

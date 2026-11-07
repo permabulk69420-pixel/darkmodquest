@@ -40,6 +40,8 @@ public:
 
 	void Bind();
 	void BindDraw();
+	// Call after the last depth/stencil reader, before leaving this draw target.
+	void InvalidateDepthStencil();
 
 	void BlitTo(FrameBuffer *target, GLbitfield mask, GLenum filter = GL_LINEAR);
 	void BlitToVidSize(FrameBuffer *target, GLbitfield mask, GLenum filter, int x, int y, int w, int h);

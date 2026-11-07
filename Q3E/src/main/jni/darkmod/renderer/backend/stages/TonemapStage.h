@@ -23,9 +23,14 @@ public:
 	void Shutdown();
 
 	void ApplyTonemap( FrameBuffer *destinationFbo, idImage *sourceTexture );
+	bool ApplyTonemapArray(FrameBuffer *destinationFbo,GLuint texture,int layer);
 
 private:
 	GLSLProgram *tonemapShader = nullptr;
+	GLSLProgram *arrayShader = nullptr;
+	uint64_t arrayCheckedGeneration = 0;
+	bool arrayReady = false;
+	void Apply(FrameBuffer *destinationFbo,idImage *sourceTexture,GLuint arrayTexture,int layer,GLSLProgram *shader);
 
 	struct Uniforms;
 };

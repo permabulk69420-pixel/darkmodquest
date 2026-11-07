@@ -5073,6 +5073,10 @@ static void load_GL_VERSION_2_1(GLADloadproc _load) {
 }
 static void load_GL_VERSION_3_0(GLADloadproc _load) {
 	if(!GLAD_GL_VERSION_3_0) return;
+#ifdef _GLES
+	glad_glInvalidateFramebuffer = (PFNGLINVALIDATEFRAMEBUFFERPROC)load("glInvalidateFramebuffer");
+	glad_glInvalidateSubFramebuffer = (PFNGLINVALIDATESUBFRAMEBUFFERPROC)load("glInvalidateSubFramebuffer");
+#endif
 	glad_glColorMaski = (PFNGLCOLORMASKIPROC)load("glColorMaski");
 	glad_glGetBooleani_v = (PFNGLGETBOOLEANI_VPROC)load("glGetBooleani_v");
 	glad_glGetIntegeri_v = (PFNGLGETINTEGERI_VPROC)load("glGetIntegeri_v");

@@ -17,9 +17,18 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 precision highp float;
 precision highp int;
 
+#pragma tdm_define "QUEST_TONEMAP_ARRAY"
+
 in vec2 var_TexCoord;
 out vec4 draw_Color;
-uniform sampler2D u_texture;
+#ifdef QUEST_TONEMAP_ARRAY
+uniform highp sampler2DArray u_texture;
+uniform int u_eyeLayer;
+#define TONEMAP_COORD(tc) vec3(tc,float(u_eyeLayer))
+#else
+uniform highp sampler2D u_texture;
+#define TONEMAP_COORD(tc) tc
+#endif
 
 uniform float u_exposure;
 
@@ -79,15 +88,15 @@ vec3 sharpen(vec2 texcoord) {
 	//  a b c
 	//  d(e)f
 	//  g h i
-	vec3 a = textureOffset(u_texture, texcoord, ivec2(-1, -1)).rgb;
-	vec3 b = textureOffset(u_texture, texcoord, ivec2(0, -1)).rgb;
-	vec3 c = textureOffset(u_texture, texcoord, ivec2(1, -1)).rgb;
-	vec3 d = textureOffset(u_texture, texcoord, ivec2(-1, 0)).rgb;
-	vec3 e = textureOffset(u_texture, texcoord, ivec2(0, 0)).rgb;
-	vec3 f = textureOffset(u_texture, texcoord, ivec2(1, 0)).rgb;
-	vec3 g = textureOffset(u_texture, texcoord, ivec2(-1, 1)).rgb;
-	vec3 h = textureOffset(u_texture, texcoord, ivec2(0, 1)).rgb;
-	vec3 i = textureOffset(u_texture, texcoord, ivec2(1, 1)).rgb;
+	vec3 a = textureOffset(u_texture, TONEMAP_COORD(texcoord), ivec2(-1, -1)).rgb;
+	vec3 b = textureOffset(u_texture, TONEMAP_COORD(texcoord), ivec2(0, -1)).rgb;
+	vec3 c = textureOffset(u_texture, TONEMAP_COORD(texcoord), ivec2(1, -1)).rgb;
+	vec3 d = textureOffset(u_texture, TONEMAP_COORD(texcoord), ivec2(-1, 0)).rgb;
+	vec3 e = textureOffset(u_texture, TONEMAP_COORD(texcoord), ivec2(0, 0)).rgb;
+	vec3 f = textureOffset(u_texture, TONEMAP_COORD(texcoord), ivec2(1, 0)).rgb;
+	vec3 g = textureOffset(u_texture, TONEMAP_COORD(texcoord), ivec2(-1, 1)).rgb;
+	vec3 h = textureOffset(u_texture, TONEMAP_COORD(texcoord), ivec2(0, 1)).rgb;
+	vec3 i = textureOffset(u_texture, TONEMAP_COORD(texcoord), ivec2(1, 1)).rgb;
 
 	// Soft min and max.
 	//  a b c             b
@@ -193,7 +202,7 @@ void main() {
 	if (u_sharpen) {
 		color = sharpen(var_TexCoord);
 	} else {
-		color = texture(u_texture, var_TexCoord).rgb;
+		color = texture(u_texture, TONEMAP_COORD(var_TexCoord)).rgb;
 	}
 
 	if (u_ditherInput > 0.0)
