@@ -17,6 +17,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #pragma hdrstop
 
 #include "renderer/tr_local.h"
+#include "renderer/QuestRenderDiagnostics.h"
 #include "renderer/backend/VertexArrayState.h"
 #include "renderer/backend/FrameBuffer.h"
 #include "renderer/backend/GLSLProgramManager.h"
@@ -95,6 +96,10 @@ void RB_DrawElementsWithCounters( const drawSurf_t *surf, drawCallKind_t kind ) 
 		indexPtr = surf->frontendGeo->indexes; // FIXME
 	}
 	int basePointer = vertexCache.GetBaseVertex();
+	if ( kind == DCK_SURFACE_PASS && vr_rendererDiagnostics.GetBool() && backEnd.viewDef && !backEnd.viewDef->IsLightGem() ) {
+		if ( (surf->dsFlags & DSF_ATMOSPHERIC_FOG) || (surf->material && surf->material->IsAtmosphericFog()) ) ++questRenderCounters.fogSurfaceDraws;
+		if ( surf->dsFlags & DSF_SOFT_PARTICLE ) ++questRenderCounters.softParticleDraws;
+	}
 	if ( basePointer < 0 )
 		qglDrawElements( GL_TRIANGLES, surf->numIndexes, GL_INDEX_TYPE, indexPtr );
 	else

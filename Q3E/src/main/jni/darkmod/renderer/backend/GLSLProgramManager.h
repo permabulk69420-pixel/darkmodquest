@@ -44,6 +44,7 @@ public:
 
 	void Reload( const char *name );
 	void ReloadAllPrograms();
+	void GetStatus( int &linked, int &failed, int &unused, idStr &firstFailure ) const;
 
 	// global built-in shaders
 	GLSLProgram *renderToolsShader;

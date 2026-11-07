@@ -489,6 +489,7 @@ class Q3EGameHelper
             command.SetProp("vr_showPerf", preferences.getBoolean(Q3EPreference.pref_vr_show_perf, false) ? "1" : "0");
         // Always apply the visible checkbox, including its off default, over saved game configs.
         command.SetProp("vr_fog", preferences.getBoolean(Q3EPreference.pref_vr_fog, false) ? "1" : "0");
+        command.SetProp("vr_rendererDiagnostics", preferences.getBoolean(Q3EPreference.pref_vr_renderer_diagnostics, false) ? "1" : "0");
         if(preferences.contains(Q3EPreference.pref_vr_hud_height))
             command.SetProp("vr_uiOverlayHeight", String.valueOf(preferences.getInt(Q3EPreference.pref_vr_hud_height, 180) / 100.0f));
         if(preferences.contains(Q3EPreference.pref_vr_hud_distance))

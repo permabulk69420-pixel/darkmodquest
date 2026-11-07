@@ -10,6 +10,7 @@
 bool R_UseMobileLighting();
 bool R_QuestFogDisabled( const viewDef_t *view );
 bool R_QuestSkipFogSurface( const viewDef_t *view, const srfTriangles_t *tri, const idMaterial *material );
+bool R_QuestSkipFogVolume( const viewDef_t *view, const idMaterial *material );
 bool R_UseQuestLightScissors();
 MobileRenderPlan::Rect RB_QuestViewViewport( const viewDef_t *view );
 MobileRenderPlan::Rect RB_QuestLightScissor( const viewDef_t *view, const viewLight_t *light,
@@ -25,6 +26,7 @@ public:
 	void EndFrame();
 	bool HasView( const viewDef_t *view ) const;
 	bool HasFrame() const;
+	void GetDiagnosticsText( char *buffer, int size ) const; // render thread only
 	void Draw( const viewDef_t *view );
 	// Volumetric lights sample the same shared depth as opaque/translucent
 	// surfaces, so there is no second shadow renderer or unshadowed light leak.

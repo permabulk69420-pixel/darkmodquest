@@ -45,6 +45,8 @@ public:
 
 	bool Link();
 	bool EnsureLinked();
+	bool IsLinked() const { return linked; }
+	bool HasFailed() const { return shaderLoadFailed || (program != 0 && !linked); }
 	bool Validate();
 
 	void LoadFromFiles( const char *vertexFile, const char *fragmentFile, const idHashMapDict &defines = {} );

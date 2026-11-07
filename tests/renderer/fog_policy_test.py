@@ -17,23 +17,44 @@ def compiled_surface_policy():
     """Use shipping C++ policy and content classification, also in GLES tests."""
     policy = method(RENDERER / 'backend/stages/MobileLightingStage.cpp', 'bool R_QuestFogDisabled(')
     surface = method(RENDERER / 'backend/stages/MobileLightingStage.cpp', 'bool R_QuestSkipFogSurface(')
+    volume = method(RENDERER / 'backend/stages/MobileLightingStage.cpp', 'bool R_QuestSkipFogVolume(')
+    render_volumes = method(RENDERER / 'backend/stages/VolumetricStage.cpp', 'void VolumetricStage::RenderAll(')
     source = r'''
 #include "renderer/QuestAtmosphere.h"
-struct viewDef_t {bool lightgem;bool IsLightGem()const{return lightgem;}};
+#include "renderer/QuestRenderDiagnostics.h"
+struct viewLight_t;
+struct viewDef_t {bool lightgem;viewLight_t *viewLights=nullptr;bool IsLightGem()const{return lightgem;}};
 struct {bool active;bool IsActive()const{return active;}} backend;
 auto *vrBackend=&backend;
 struct {bool enabled;bool GetBool()const{return enabled;}} vr_fog;
 struct srfTriangles_t {bool atmosphericFog;};
-struct idMaterial {bool fog;bool IsAtmosphericFog()const{return fog;}};
+struct idMaterial {bool fog;bool fogLight=false;bool IsAtmosphericFog()const{return fog;}bool IsFogLight()const{return fogLight;}};
+struct viewLight_t {const idMaterial *lightShader;float volumetricDust;viewLight_t *next;};
+QuestRenderCounters questRenderCounters;
+class VolumetricStage {public:void RenderAll(const viewDef_t *view);bool RenderLight(const viewDef_t*,const viewLight_t*){return true;}};
 POLICY
 SURFACE
+VOLUME
+RENDER_VOLUMES
 extern "C" bool quest_fog_skip(bool active,bool fog,bool lightgem,const char *particle,const char *material){
  backend.active=active;vr_fog.enabled=fog;viewDef_t view{lightgem};
  idMaterial mat{QuestAtmosphere::IsFogMaterial(material)};
  srfTriangles_t tri{QuestAtmosphere::IsFogParticle(particle)||mat.fog};
  return R_QuestSkipFogSurface(&view,&tri,&mat);
 }
-'''.replace('POLICY', policy).replace('SURFACE', surface)
+extern "C" int quest_volume_passes(bool fog,bool lighting,bool lightgem){
+ backend.active=true;vr_fog.enabled=fog;
+ idMaterial regular{false,false}, atmosphere{true,true};
+ viewLight_t fogLight{&atmosphere,lighting?1.0f:0.0f,nullptr};
+ viewLight_t lamp{&regular,lighting?1.0f:0.0f,&fogLight};
+ viewDef_t view{lightgem,&lamp};questRenderCounters={};
+ VolumetricStage stage;stage.RenderAll(&view);
+ return questRenderCounters.volumetricLights;
+}
+extern "C" const char *quest_scissor_state(bool enabled,long long area,int checks,int mismatches){
+ return QuestScissorStatus(enabled,area,checks,mismatches);
+}
+'''.replace('POLICY', policy).replace('SURFACE', surface).replace('RENDER_VOLUMES', render_volumes).replace('VOLUME', volume)
     with tempfile.TemporaryDirectory(prefix='tdm-fog-surface-') as directory:
         cpp = Path(directory) / 'fog.cpp'
         library = Path(directory) / 'fog.so'
@@ -44,10 +65,34 @@ extern "C" bool quest_fog_skip(bool active,bool fog,bool lightgem,const char *pa
         skip = lib.quest_fog_skip
         skip.argtypes = [C.c_bool, C.c_bool, C.c_bool, C.c_char_p, C.c_char_p]
         skip.restype = C.c_bool
+        skip.volume_passes = lib.quest_volume_passes
+        skip.volume_passes.argtypes = [C.c_bool, C.c_bool, C.c_bool]
+        skip.volume_passes.restype = C.c_int
+        skip.scissor_state = lib.quest_scissor_state
+        skip.scissor_state.argtypes = [C.c_bool, C.c_longlong, C.c_int, C.c_int]
+        skip.scissor_state.restype = C.c_char_p
         yield skip
 
 
 class FogPolicyTests(unittest.TestCase):
+    def test_fog_and_volumetric_lighting_are_independent(self):
+        # Run the actual production VolumetricStage::RenderAll dispatch, not a
+        # duplicate of its control flow. The lamp's shaft must survive fog-off.
+        with compiled_surface_policy() as policy:
+            self.assertEqual(policy.volume_passes(False, True, False), 1)
+            self.assertEqual(policy.volume_passes(True, True, False), 2)
+            self.assertEqual(policy.volume_passes(False, False, False), 0)
+            self.assertEqual(policy.volume_passes(True, False, False), 0)
+            self.assertEqual(policy.volume_passes(False, True, True), 0)
+
+    def test_diagnostics_require_actual_scissor_samples(self):
+        with compiled_surface_policy() as policy:
+            self.assertEqual(policy.scissor_state(False, 1000, 2, 0), b'OFF')
+            self.assertTrue(policy.scissor_state(True, 0, 0, 0).startswith(b'IDLE'))
+            self.assertTrue(policy.scissor_state(True, 1000, 0, 0).startswith(b'IDLE'))
+            self.assertTrue(policy.scissor_state(True, 1000, 2, 1).startswith(b'FAIL'))
+            self.assertTrue(policy.scissor_state(True, 1000, 2, 0).startswith(b'VERIFIED'))
+
     def test_particle_fog_and_sheets_follow_switch_without_removing_shared_smoke(self):
         # Actual core content identifiers: dustfog uses the SAME shotgunpuff
         # material as ordinary smoke. Disabling that material globally is wrong.

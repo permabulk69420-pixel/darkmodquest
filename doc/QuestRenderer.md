@@ -71,8 +71,8 @@ shadows; `r_questShadowAtlasSize` (512â€“4096) and `r_questShadowFaceSize` (32â€
 are launch-time quality controls. The defaults prioritize standalone frame time
 without lowering eye-buffer resolution or removing material effects.
 
-Quest VR fog and volumetric effects default to off (`vr_fog 0`). The launcher
-has a **Fog, mist and light shafts (slower)** checkbox to restore them on the next
+Quest VR atmospheric fog defaults to off (`vr_fog 0`). The launcher
+has a **Fog and mist (slower)** checkbox to restore it on the next
 game launch. This includes fog lights, atmospheric blend lights, fog sheets, and
 fog particle stages (including Saint Lucia's `tdm_dustfog3`). Classification is
 cached when content loads; generic smoke materials are not globally disabled.
@@ -84,6 +84,30 @@ drawn. Surface lighting, shadows, and the lightgem's fog rendering are retained.
 Flat rendering keeps its existing fog settings. Weapon effects, flames, ordinary
 smoke, opaque skyboxes and surface lighting stay enabled. The launcher always
 passes the checkbox value, including the off default, over archived game config.
+Volumetric lighting is independent: `r_volumetricEnable` and its existing game
+menu option still control light shafts. Fog-off removes fog-classified volumes
+but leaves ordinary lamps' volumetric lighting and their frustum buffers intact.
+
+**Show renderer diagnostics overlay** is a separate launcher checkbox, off by
+default. It adds a readable panel to the existing VR HUD, with no controller
+binding. It reports the last completed stereo frame, actual eye resolution and
+runtime refresh period, frame/GPU timing, mobile/legacy pipeline, loaded shader
+status (including the first failed program), shadow build/draw counts, lighting
+batch counts, and separate fog/volumetric/SSAO/soft-particle activity. Foveation
+reports the backend's accepted state, and MSAA reports effective and requested
+samples. Settings and observed work are labeled separately; an empty scene is
+idle, not a failure. Fog rejection counts belong to individual frontend entity
+jobs, so parallel frontend work does not race on a shared counter.
+
+With diagnostics enabled, mobile scissors additionally sample `GL_SCISSOR_TEST`
+and `GL_SCISSOR_BOX` once per rendered eye/view and compare the actual rectangle
+with the one used for that lighting draw. `VERIFIED` requires a successful GL
+sample; a cvar alone never produces that status. Rectangle area, culled batches,
+and separated-light batch splits show whether scissoring is reducing work.
+This is state/activity verification, not a claim that all scene visuals are
+correct. The panel is published under a mutex; the HUD never reads live backend
+counters or queries GL from the frontend. Switch it off for timing comparisons
+without the panel's draw and state-query overhead.
 
 World/depth calculations and shadow samplers retain high precision, including
 when `harm_r_useMediumPrecision` is set. This includes the separate depth prepass:

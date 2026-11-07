@@ -909,8 +909,10 @@ static void R_ParticleDeform( drawSurf_t *surf, bool useArea ) {
 			continue;
 		if ( stage->hidden )		// just for gui particle editor use
 			continue;
-		if ( stage->atmosphericFog && R_QuestFogDisabled(viewDef) )
+		if ( stage->atmosphericFog && R_QuestFogDisabled(viewDef) ) {
+			++surf->space->questFogHidden;
 			continue;
+		}
 
 		int totalParticles = idParticle_GetParticleCountOnSurface(*stage, srcTri, totalArea, psys.totalParticles);
 

@@ -15,6 +15,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 
 #include "precompiled.h"
 #include "renderer/backend/stages/VolumetricStage.h"
+#include "renderer/QuestRenderDiagnostics.h"
 
 #include "renderer/backend/FrameBufferManager.h"
 #include "renderer/backend/FrameBuffer.h"
@@ -100,10 +101,10 @@ void VolumetricStage::Shutdown() {
 }
 
 void VolumetricStage::RenderAll(const viewDef_t *viewDef) {
-	if ( R_QuestFogDisabled(viewDef) ) return;
 	for ( const viewLight_t *vLight = viewDef->viewLights ; vLight; vLight = vLight->next ) {
-		if ( vLight->volumetricDust > 0.0f && !viewDef->IsLightGem() )
-			RenderLight( viewDef, vLight );
+		if ( R_QuestSkipFogVolume(viewDef, vLight->lightShader) ) continue;
+		if ( vLight->volumetricDust > 0.0f && !viewDef->IsLightGem() && RenderLight(viewDef, vLight) )
+			++questRenderCounters.volumetricLights;
 	}
 }
 

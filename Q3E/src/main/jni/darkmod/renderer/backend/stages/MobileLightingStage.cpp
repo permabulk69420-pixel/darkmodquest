@@ -9,6 +9,7 @@
 #include "renderer/backend/FrameBufferManager.h"
 #include "renderer/backend/FrameBuffer.h"
 #include "renderer/vr/OpenXRBackend.h"
+#include "renderer/QuestRenderDiagnostics.h"
 #include <unordered_map>
 #include <tuple>
 #include <map>
@@ -16,6 +17,10 @@
 namespace {
 #include "glprogs/tdm_constants_shared.glsl"
 }
+
+idCVar vr_rendererDiagnostics( "vr_rendererDiagnostics", "0", CVAR_RENDERER | CVAR_BOOL,
+	"Show live renderer settings and measured stereo rendering activity on the VR HUD; set in the launcher" );
+QuestRenderCounters questRenderCounters;
 
 idCVar r_questRenderer( "r_questRenderer", "1", CVAR_RENDERER | CVAR_BOOL | CVAR_INIT,
 	"Quest forward renderer: shared stereo shadows and two-light surface batches. Set at launch; 0 uses the legacy renderer." );
@@ -28,7 +33,7 @@ idCVar r_questShowRenderStats( "r_questShowRenderStats", "0", CVAR_RENDERER | CV
 idCVar r_questLightScissor( "r_questLightScissor", "1", CVAR_RENDERER | CVAR_BOOL | CVAR_ARCHIVE,
 	"Clip mobile lighting, blend lights and volumetrics to bounds projected for the active eye" );
 idCVar vr_fog( "vr_fog", "0", CVAR_RENDERER | CVAR_BOOL | CVAR_ARCHIVE,
-	"Enable fog lights, fog particles, fog sheets and volumetric light effects in VR. Off by default; lightgem rendering is unchanged." );
+	"Enable atmospheric fog lights, particles and sheets in VR. Off by default. Volumetric lighting is controlled separately." );
 
 bool R_UseMobileLighting() {
 #ifdef TDM_VR_OPENXR
@@ -50,6 +55,10 @@ bool R_UseQuestLightScissors() { return R_UseMobileLighting() && r_questLightSci
 
 bool R_QuestSkipFogSurface( const viewDef_t *view, const srfTriangles_t *tri, const idMaterial *material ) {
 	return R_QuestFogDisabled(view) && (tri->atmosphericFog || material->IsAtmosphericFog());
+}
+
+bool R_QuestSkipFogVolume( const viewDef_t *view, const idMaterial *material ) {
+	return R_QuestFogDisabled(view) && (material->IsFogLight() || material->IsAtmosphericFog());
 }
 
 MobileRenderPlan::Rect RB_QuestViewViewport( const viewDef_t *view ) {
@@ -193,6 +202,8 @@ struct MobileLightingStage::Impl {
 	int culledBatches = 0;
 	int splitBatches = 0;
 	long long scissorPixels = 0, fullPixels = 0;
+	int shadowBuilds = 0, eyePasses = 0, scissorChecks = 0, scissorMismatches = 0;
+	bool checkScissor = false;
 
 	void Collect( const viewDef_t *view );
 	void DrawShadows();
@@ -233,8 +244,36 @@ bool MobileLightingStage::HasView( const viewDef_t *view ) const {
 }
 bool MobileLightingStage::HasFrame() const { return !impl->views.empty(); }
 
+void MobileLightingStage::GetDiagnosticsText( char *buffer, int size ) const {
+	const Impl &i = *impl;
+	const bool active = R_UseMobileLighting() && !i.views.empty();
+	if ( !active ) {
+		idStr::Copynz(buffer, R_UseMobileLighting() ? "Pipeline: IDLE (no 3D scene)\n" :
+			"Pipeline: legacy (Quest forward OFF)\nScissors/shared shadows: mobile path inactive\n", size);
+		return;
+	}
+	snprintf(buffer, size,
+		"Pipeline: Quest forward ACTIVE | %d eye/view passes\n"
+		"Forward shader: %s | shadow shader: %s\n"
+		"Scissors: %s\n"
+		"Lighting rectangle area: %.1f%% | culled %d | split %d\n"
+		"Scissor GL samples: %d | mismatches: %d\n"
+		"Shadow builds: %d/frame | shared draws: %d | atlas %d\n"
+		"Light packets: %d -> %d batches | stereo draws: %d\n",
+		i.eyePasses, i.lighting && i.lighting->IsLinked() ? "LINKED" : "NOT LINKED",
+		i.depth && i.depth->IsLinked() ? "LINKED" : "NOT LINKED",
+		QuestScissorStatus(R_UseQuestLightScissors(), i.fullPixels, i.scissorChecks, i.scissorMismatches),
+		100.0 * double(i.scissorPixels) / std::max(1.0, double(i.fullPixels)), i.culledBatches, i.splitBatches,
+		i.scissorChecks, i.scissorMismatches, i.shadowBuilds, i.shadowDraws, i.atlasSize,
+		i.packets, i.batches, i.eyeDraws);
+}
+
 void MobileLightingStage::BeginFrame( const emptyCommand_t *commands ) {
 	EndFrame();
+	impl->packets = impl->batches = impl->shadowDraws = impl->eyeDraws = 0;
+	impl->culledBatches = impl->splitBatches = 0;
+	impl->scissorPixels = impl->fullPixels = 0;
+	impl->shadowBuilds = impl->eyePasses = impl->scissorChecks = impl->scissorMismatches = 0;
 	if ( !R_UseMobileLighting() || r_skipRender.GetBool() ) return;
 	// A missing/failed program must not leave the depth shader active while
 	// replaying lighting draws, which paints black geometry without lighting.
@@ -278,6 +317,7 @@ void MobileLightingStage::BeginFrame( const emptyCommand_t *commands ) {
 		common->Error( "Quest shadow atlas cannot fit %d lights", int(requested.size()) );
 	for ( size_t i = 0; i < pages.size(); ++i ) impl->shadows[i].page = pages[i];
 	impl->DrawShadows();
+	impl->shadowBuilds = impl->shadows.empty() ? 0 : 1;
 }
 
 void MobileLightingStage::Impl::Collect( const viewDef_t *view ) {
@@ -519,6 +559,15 @@ void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, ViewPlan &plan
 		plan.currentScissor = rect;
 	}
 	const auto &first = *visible[0];
+	if ( checkScissor && vr_rendererDiagnostics.GetBool() && !view->IsLightGem() ) {
+		// One state sample per eye/view, never a query on every draw.
+		GLint box[4];
+		qglGetIntegerv(GL_SCISSOR_BOX, box);
+		++scissorChecks;
+		if ( !qglIsEnabled(GL_SCISSOR_TEST) || box[0] != rect.x1 || box[1] != rect.y1 ||
+			box[2] != rect.x2-rect.x1 || box[3] != rect.y2-rect.y1 ) ++scissorMismatches;
+		checkScissor = false;
+	}
 	const drawInteraction_t &inter = first.inter;
 	const drawSurf_t *surf = first.geometry;
 	GL_State( GLS_SRCBLEND_ONE | GLS_DSTBLEND_ONE | GLS_DEPTHMASK |
@@ -600,6 +649,8 @@ void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, ViewPlan &plan
 void MobileLightingStage::Draw( const viewDef_t *view ) {
 	auto it = impl->views.find(view);
 	if ( it == impl->views.end() ) return;
+	if ( !view->IsLightGem() ) ++impl->eyePasses;
+	impl->checkScissor = R_UseQuestLightScissors();
 	TRACE_GL_SCOPE("QuestForwardLighting");
 	frameBuffers->currentRenderFbo->Bind();
 	FB_ApplyViewport();

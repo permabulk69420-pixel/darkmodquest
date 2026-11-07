@@ -55,6 +55,18 @@ GLSLProgramManager::~GLSLProgramManager() {
 	Shutdown();	
 }
 
+void GLSLProgramManager::GetStatus( int &linked, int &failed, int &unused, idStr &firstFailure ) const {
+	linked = failed = unused = 0;
+	firstFailure.Clear();
+	for ( const GLSLProgram *program : programs ) {
+		if ( program->IsLinked() ) ++linked;
+		else if ( program->HasFailed() ) {
+			++failed;
+			if ( firstFailure.IsEmpty() ) firstFailure = program->GetName();
+		} else ++unused;
+	}
+}
+
 void GLSLProgramManager::Shutdown() {
 	for( GLSLProgram *program : programs ) {
 		delete program;

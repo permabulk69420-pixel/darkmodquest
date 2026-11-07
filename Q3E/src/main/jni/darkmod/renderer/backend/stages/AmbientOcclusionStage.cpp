@@ -18,6 +18,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #pragma hdrstop
 
 #include "renderer/backend/stages/AmbientOcclusionStage.h"
+#include "renderer/QuestRenderDiagnostics.h"
 #include "renderer/resources/Image.h"
 #include "renderer/tr_local.h"
 #include "renderer/backend/GLSLProgramManager.h"
@@ -156,6 +157,7 @@ extern GLuint fboPrimary;
 extern bool primaryOn;
 
 void AmbientOcclusionStage::ComputeSSAOFromDepth() {
+	++questRenderCounters.ssaoPasses;
 	TRACE_GL_SCOPE("AmbientOcclusionStage");
 
 	if (ssaoFBO == nullptr) {

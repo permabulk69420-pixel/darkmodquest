@@ -142,6 +142,7 @@ static const int DSF_VIEW_INSIDE_SHADOW	= 1;
 static const int DSF_SOFT_PARTICLE = 2; // #3878
 static const int DSF_BLOCK_SELF_SHADOWS = 4; // #6571: used when light interaction and self-shadows are computed in one draw call
 static const int DSF_GUI_SURF = 8; // VR: surface of an in-world GUI, its modelview matrix is not in any viewEntity_t chain
+static const int DSF_ATMOSPHERIC_FOG = 16; // immutable copy of particle-stage identity
 
 struct viewLight_s;
 
@@ -476,6 +477,7 @@ struct preparedSurf_t {
 // which the front end may be modifying simultaniously if running in SMP mode.
 // A single entityDef can generate multiple viewEntity_t in a single frame, as when seen in a mirror
 typedef struct viewEntity_s {
+	mutable int questFogHidden;	// written by this entity's frontend job only
 	struct viewEntity_s	*next;
 
 	// back end should NOT reference the entityDef, because it can change when running SMP

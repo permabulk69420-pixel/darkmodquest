@@ -17,6 +17,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #include "renderer/backend/stages/MobileLightingStage.h"
 
 #include "renderer/backend/stages/LightPassesStage.h"
+#include "renderer/QuestRenderDiagnostics.h"
 
 #include "renderer/backend/RenderBackend.h"
 #include "renderer/backend/GLSLProgramManager.h"
@@ -75,6 +76,7 @@ void LightPassesStage::DrawAllFogLights( const viewDef_t *viewDef, const DrawMas
 			this->vLight = vLight;
 
 			DrawFogLight( mask );
+			if ( !viewDef->IsLightGem() ) ++questRenderCounters.fogLightPasses;
 		}
 	}
 
@@ -100,6 +102,7 @@ void LightPassesStage::DrawAllBlendLights( const viewDef_t *viewDef ) {
 			this->vLight = vLight;
 
 			DrawBlendLight();
+			if ( !viewDef->IsLightGem() && vLight->lightShader->IsAtmosphericFog() ) ++questRenderCounters.blendFogPasses;
 		}
 	}
 

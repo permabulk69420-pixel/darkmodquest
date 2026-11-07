@@ -445,7 +445,7 @@ viewLight_t *R_SetLightDefViewLight( idRenderLightLocal *light ) {
 	}
 	// Keep shadow implementation selection consistent with the lightgem,
 	// including the legacy VR renderer, before removing eye-only effects.
-	if ( R_QuestFogDisabled(tr.viewDef) ) vLight->volumetricDust = 0.0f;
+	if ( R_QuestSkipFogVolume(tr.viewDef, shader) ) vLight->volumetricDust = 0.0f;
 
 
 	// multi-light shader stuff
@@ -806,6 +806,7 @@ drawSurf_t *R_PrepareLightSurf( const srfTriangles_t *tri, const viewEntity_t *s
 	drawSurf->material = material;
 	drawSurf->scissorRect = scissor;
 	drawSurf->dsFlags = 0;
+	if ( tri->atmosphericFog ) drawSurf->dsFlags |= DSF_ATMOSPHERIC_FOG;
 	
 	drawSurf->particle_radius = 0.0f; // #3878
 
@@ -1105,7 +1106,7 @@ void R_AddLightSurfaces( void ) {
 
 		// fog lights will need to draw the light frustum triangles, so make sure they
 		// are in the vertex cache
-		if ( (!R_QuestFogDisabled(tr.viewDef) && (lightShader->IsFogLight() || light->parms.volumetricDust > 0.0f)) || r_showLights > 1 ) {
+		if ( (lightShader->IsFogLight() && !R_QuestFogDisabled(tr.viewDef)) || vLight->volumetricDust > 0.0f || r_showLights > 1 ) {
 			if ( !vertexCache.CacheIsCurrent(vLight->frustumTris->ambientCache) ) {
 				R_CreateAmbientCache( vLight->frustumTris, false );
 			}
@@ -1309,6 +1310,7 @@ void R_AddDrawSurf( const srfTriangles_t *tri, const viewEntity_t *space, const 
 	drawSurf->scissorRect = scissor;
 	drawSurf->sort = material->GetSort();
 	drawSurf->dsFlags = 0;
+	if ( tri->atmosphericFog ) drawSurf->dsFlags |= DSF_ATMOSPHERIC_FOG;
 	if ( soft_particle_radius != -1.0f ) {	// #3878
 		drawSurf->dsFlags |= DSF_SOFT_PARTICLE;
 		drawSurf->particle_radius = soft_particle_radius;
@@ -1492,6 +1494,7 @@ static void R_AddAmbientDrawsurfs( viewEntity_t *vEntity ) {
 		// Reject before vertex/index uploads. Cached particle geometry stays intact
 		// for the lightgem and other views which still need the original effects.
 		if ( R_QuestSkipFogSurface(tr.viewDef, tri, shader) ) {
+			++vEntity->questFogHidden;
 			continue;
 		}
 
@@ -1757,6 +1760,9 @@ void R_AddModelSurfaces( void ) {
 	// clear the ambient surface list
 	tr.viewDef->numDrawSurfs = 0;
 	tr.viewDef->maxDrawSurfs = 0;	// will be set to INITIAL_DRAWSURFS on R_AddDrawSurf
+	// Each model job owns one viewEntity, avoiding contended counters in the
+	// parallel frontend. Completed values are read only by the render thread.
+	for ( viewEntity_t *entity = tr.viewDef->viewEntitys; entity; entity = entity->next ) entity->questFogHidden = 0;
 
 	if ( r_useParallelAddModels.GetBool() && r_materialOverride.GetString()[0] == '\0' ) {
 		if ( r_useParallelAddModels.GetInteger() == 2 ) {

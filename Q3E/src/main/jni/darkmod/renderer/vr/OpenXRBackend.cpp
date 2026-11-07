@@ -41,6 +41,8 @@ OpenXRBackend *vrBackend = &xrBackendInstance;
 #include "renderer/backend/FrameBuffer.h"
 #include "renderer/backend/FrameBufferManager.h"
 #include "renderer/backend/RenderBackend.h"
+#include "renderer/backend/GLSLProgramManager.h"
+#include "renderer/QuestRenderDiagnostics.h"
 #include "framework/GamepadInput.h"
 #include "renderer/vr/xr_common.h"
 #include "renderer/vr/OpenXRSwapchain.h"
@@ -377,6 +379,10 @@ struct OpenXRBackend::Impl {
 	XrTime recenterTime = 0;
 
 	FrameTimer timer;
+	mutable std::mutex diagnosticsMutex;
+	char diagnosticsText[4096] = {};
+	unsigned diagnosticsFrame = 0;
+	void UpdateDiagnostics( const frameData_t *fd );
 	OpenXRInput input;
 	std::mutex inputMutex;
 	vrControllerState_t controllerState;	// polled once per frame by the render thread, read by the game thread
@@ -1222,6 +1228,7 @@ void OpenXRBackend::Impl::RenderFrame( const frameData_t *fd ) {
 
 		try {
 			timer.BeginGpu();
+			questRenderCounters = {};
 			// The frontend has already culled a combined stereo view. Shadow
 			// depth and material/light packets are independent of the late eye
 			// pose: build once, before either eye starts its tile render pass.
@@ -1229,6 +1236,7 @@ void OpenXRBackend::Impl::RenderFrame( const frameData_t *fd ) {
 			ExecutePass( fd, PASS_LEFT, eyeSwapchains[0].CurrentFrameBuffer() );
 			ExecutePass( fd, PASS_RIGHT, eyeSwapchains[1].CurrentFrameBuffer() );
 			ExecutePass( fd, PASS_UI, uiSwapchain.CurrentFrameBuffer() );
+			if ( vr_rendererDiagnostics.GetBool() ) UpdateDiagnostics(fd);
 			renderBackend->FinishStereoFrame();
 			timer.EndGpu();
 		} catch ( ... ) {
@@ -1306,6 +1314,66 @@ bool OpenXRBackend::GetPerfText( char *buffer, int size ) const {
 		return false;
 	}
 	return impl->timer.GetText( buffer, size );
+}
+
+void OpenXRBackend::Impl::UpdateDiagnostics( const frameData_t *fd ) {
+	char mobile[1400], timing[160] = "Timing: collecting frame/GPU samples";
+	renderBackend->MobileLighting().GetDiagnosticsText(mobile, sizeof(mobile));
+	timer.GetText(timing, sizeof(timing));
+	int linked, failed, unused;
+	idStr firstFailure;
+	programManager->GetStatus(linked, failed, unused, firstFailure);
+	int hidden = 0;
+	std::vector<const viewDef_t *> observed;
+	for ( const emptyCommand_t *cmd = fd->cmdHead; cmd; cmd = NextCommand(cmd) ) {
+		if ( cmd->commandId != RC_DRAW_VIEW ) continue;
+		const viewDef_t *view = ((const drawSurfsCommand_t *)cmd)->viewDef;
+		if ( !view || !view->viewEntitys || view->IsLightGem() || std::find(observed.begin(), observed.end(), view) != observed.end() ) continue;
+		observed.push_back(view);
+		for ( const viewEntity_t *entity = view->viewEntitys; entity; entity = entity->next ) hidden += entity->questFogHidden;
+	}
+	const QuestRenderCounters &c = questRenderCounters;
+	const int fogDraws = c.fogSurfaceDraws + c.fogLightPasses + c.blendFogPasses;
+	const bool fog = cvarSystem->GetCVarBool("vr_fog");
+	const bool volumes = cvarSystem->GetCVarBool("r_volumetricEnable");
+	const bool usingFoveation = foveationActive && foveatedTexture && r_multiSamples.GetInteger() <= 1;
+	const char *foveation = vr_foveation.GetInteger() <= 0 ? "OFF" : usingFoveation ? "ACCEPTED" : "UNAVAILABLE";
+	char text[4096];
+	snprintf(text, sizeof(text),
+		"RENDERER DIAGNOSTICS | last completed frame %u\n"
+		"OpenXR ACTIVE | stereo 2 eyes | %dx%d | %.1f Hz\n"
+		"%s\n%s"
+		"Shaders: %d linked | %d FAILED | %d unused\n"
+		"Shader failure: %.54s\n"
+		"Fog/mist: %s | hidden surfaces/stages: %d\n"
+		"Fog draws: particles/sheets %d | lights %d | blend %d\n"
+		"Volumetric lighting: %s | light passes: %d\n"
+		"SSAO setting: %s | passes: %d\n"
+		"Soft particles setting: %s | draws: %d\n"
+		"Foveation: %s (requested level %d)\n"
+		"Shadows setting: %s | soft filter: %s\n"
+		"MSAA samples: %d (requested %d) | HDR buffer: %d-bit\n",
+		++diagnosticsFrame, eyeWidth, eyeHeight, displayPeriod > 0 ? 1e9 / double(displayPeriod) : 0.0,
+		timing, mobile, linked, failed, unused, firstFailure.IsEmpty() ? "none" : firstFailure.c_str(),
+		!fog ? (fogDraws ? "FAIL: unexpected draws" : "OFF") : fogDraws ? "ACTIVE" : "IDLE: no fog draws",
+		hidden, c.fogSurfaceDraws, c.fogLightPasses, c.blendFogPasses,
+		!volumes ? "OFF" : c.volumetricLights ? "ACTIVE" : "ON, idle in this view", c.volumetricLights,
+		cvarSystem->GetCVarBool("r_ssao") ? "ON" : "OFF", c.ssaoPasses,
+		r_useSoftParticles.GetBool() ? "ON" : "OFF", c.softParticleDraws,
+		foveation, vr_foveation.GetInteger(), r_shadows.GetBool() ? "ON" : "OFF",
+		r_softShadowsQuality.GetBool() ? "ON" : "OFF",
+		frameBuffers->primaryFbo ? frameBuffers->primaryFbo->MultiSamples() : 0,
+		r_multiSamples.GetInteger(), r_fboColorBits.GetInteger());
+	std::lock_guard<std::mutex> lock(diagnosticsMutex);
+	idStr::Copynz(diagnosticsText, text, sizeof(diagnosticsText));
+}
+
+bool OpenXRBackend::GetRendererDiagnosticsText( char *buffer, int size ) const {
+	if ( !impl->initialized || !vr_rendererDiagnostics.GetBool() ) return false;
+	std::lock_guard<std::mutex> lock(impl->diagnosticsMutex);
+	idStr::Copynz(buffer, impl->diagnosticsText[0] ? impl->diagnosticsText :
+		"RENDERER DIAGNOSTICS\nWaiting for a completed stereo frame", size);
+	return true;
 }
 
 idImage *OpenXRBackend::CreateFoveatedColorImage( int width, int height ) {
@@ -1529,6 +1597,7 @@ bool OpenXRBackend::GetHeadOrientation( idQuat & ) const { return false; }
 bool OpenXRBackend::PollControllers( vrControllerState_t &state ) { memset( &state, 0, sizeof( state ) ); return false; }
 idImage *OpenXRBackend::CreateFoveatedColorImage( int, int ) { return nullptr; }
 bool OpenXRBackend::GetPerfText( char *, int ) const { return false; }
+bool OpenXRBackend::GetRendererDiagnosticsText( char *, int ) const { return false; }
 void OpenXRBackend::CheckFoveatedFramebuffer() {}
 
 #endif // TDM_VR_OPENXR
