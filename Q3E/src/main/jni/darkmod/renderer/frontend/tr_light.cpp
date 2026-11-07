@@ -1489,6 +1489,11 @@ static void R_AddAmbientDrawsurfs( viewEntity_t *vEntity ) {
 		if ( !shader->IsDrawn() ) {
 			continue;
 		}
+		// Reject before vertex/index uploads. Cached particle geometry stays intact
+		// for the lightgem and other views which still need the original effects.
+		if ( R_QuestSkipFogSurface(tr.viewDef, tri, shader) ) {
+			continue;
+		}
 
 		// Don't put worldspawn particle textures (weather patches, mostly) on the drawSurf list for non-visible 
 		// views (in TDM, the light gem render). Important to block it before their verts are calculated -- SteveL #3970

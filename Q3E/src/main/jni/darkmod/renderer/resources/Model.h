@@ -103,6 +103,7 @@ typedef struct srfTriangles_s {
 	bool						tangentsCalculated;		// set when the vertex tangents have been calculated
 	bool						facePlanesCalculated;	// set when the face planes have been calculated
 	bool						perfectHull;			// true if there aren't any dangling edges
+	bool						atmosphericFog;		// particle-stage identity; filter separately for each view
 	bool						deformedSurface;		// if true, indexes, silIndexes, mirrorVerts, and silEdges are
 														// pointers into the original surface, and should not be freed
 

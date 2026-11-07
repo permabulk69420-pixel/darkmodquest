@@ -17,6 +17,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #pragma hdrstop
 
 #include "renderer/tr_local.h"
+#include "renderer/backend/stages/MobileLightingStage.h"
 
 /*
 =================
@@ -907,6 +908,8 @@ static void R_ParticleDeform( drawSurf_t *surf, bool useArea ) {
 		if ( !stage->cycleMsec )
 			continue;
 		if ( stage->hidden )		// just for gui particle editor use
+			continue;
+		if ( stage->atmosphericFog && R_QuestFogDisabled(viewDef) )
 			continue;
 
 		int totalParticles = idParticle_GetParticleCountOnSurface(*stage, srcTri, totalArea, psys.totalParticles);

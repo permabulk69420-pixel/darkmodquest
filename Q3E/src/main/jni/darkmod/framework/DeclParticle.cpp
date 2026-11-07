@@ -17,6 +17,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #pragma hdrstop
 
 #include "renderer/resources/Image.h"
+#include "renderer/QuestAtmosphere.h"
 
 
 
@@ -457,6 +458,8 @@ bool idDeclParticle::Parse( const char *text, const int textLength ) {
 	// precompute the "std" bounds of every stage
 	//
 	for( int i = 0; i < stages.Num(); i++ ) {
+		stages[i]->atmosphericFog = QuestAtmosphere::IsFogParticle(GetName()) ||
+			(stages[i]->material && stages[i]->material->IsAtmosphericFog());
 		stages[i]->stdBounds = idParticle_EstimateBoundsStdSys(*stages[i]);
 	}
 	return true;
@@ -719,6 +722,7 @@ Sets the stage to a default state
 */
 void idParticleStage::Default() {
 	material = declManager->FindMaterial( "_default" );
+	atmosphericFog = false;
 	totalParticles = 100;
 	spawnBunching = 1.0f;
 	particleLife = 1.5f;

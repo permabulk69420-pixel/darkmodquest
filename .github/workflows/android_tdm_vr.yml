@@ -6,8 +6,8 @@
 #     (so ordinary pushes do not spend CI minutes)
 #   - manual "Run workflow" (needs this file to exist on the default branch)
 #
-# Simple phone download: Releases -> Quest 3 - No Fog.
-# APK filename: TDM-Quest3-No-Fog.apk (also inside the Actions artifact).
+# Simple phone download: Releases -> Quest 3 - Fog Control Fix.
+# APK filename: TDM-Quest3-Fog-Control-Fix.apk (also inside the Actions artifact).
 
 name: Android APK - TDM only (arm64)
 
@@ -65,13 +65,13 @@ jobs:
     - name: Collect APK
       run: |
         mkdir -p out
-        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest3-No-Fog.apk"
+        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest3-Fog-Control-Fix.apk"
         ls -la out
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Quest3-No-Fog-APK
+        name: Quest3-Fog-Control-Fix-APK
         path: out/*.apk
         if-no-files-found: error
         retention-days: 30
@@ -81,12 +81,12 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        tag=quest-no-fog
-        apk=out/TDM-Quest3-No-Fog.apk
+        tag=quest-fog-control-fix
+        apk=out/TDM-Quest3-Fog-Control-Fix.apk
         notes="Latest successful Quest 3 ARM64 build. Source commit: ${GITHUB_SHA} (branch ${GITHUB_REF_NAME}). This download is automatically replaced after the next successful [apk] build."
         if gh release view "$tag" >/dev/null 2>&1; then
           gh release upload "$tag" "$apk" --clobber
-          gh release edit "$tag" --title "Quest 3 - No Fog" --notes "$notes" --latest
+          gh release edit "$tag" --title "Quest 3 - Fog Control Fix" --notes "$notes" --latest
         else
-          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 - No Fog" --notes "$notes" --latest
+          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 - Fog Control Fix" --notes "$notes" --latest
         fi

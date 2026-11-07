@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Exercise production VR fog policy and portal culling without a headset."""
 from pathlib import Path
+from contextlib import contextmanager
+import ctypes as C
 import subprocess
 import tempfile
 import unittest
@@ -10,7 +12,76 @@ ROOT = Path(__file__).resolve().parents[2]
 RENDERER = ROOT / 'Q3E/src/main/jni/darkmod/renderer'
 
 
+@contextmanager
+def compiled_surface_policy():
+    """Use shipping C++ policy and content classification, also in GLES tests."""
+    policy = method(RENDERER / 'backend/stages/MobileLightingStage.cpp', 'bool R_QuestFogDisabled(')
+    surface = method(RENDERER / 'backend/stages/MobileLightingStage.cpp', 'bool R_QuestSkipFogSurface(')
+    source = r'''
+#include "renderer/QuestAtmosphere.h"
+struct viewDef_t {bool lightgem;bool IsLightGem()const{return lightgem;}};
+struct {bool active;bool IsActive()const{return active;}} backend;
+auto *vrBackend=&backend;
+struct {bool enabled;bool GetBool()const{return enabled;}} vr_fog;
+struct srfTriangles_t {bool atmosphericFog;};
+struct idMaterial {bool fog;bool IsAtmosphericFog()const{return fog;}};
+POLICY
+SURFACE
+extern "C" bool quest_fog_skip(bool active,bool fog,bool lightgem,const char *particle,const char *material){
+ backend.active=active;vr_fog.enabled=fog;viewDef_t view{lightgem};
+ idMaterial mat{QuestAtmosphere::IsFogMaterial(material)};
+ srfTriangles_t tri{QuestAtmosphere::IsFogParticle(particle)||mat.fog};
+ return R_QuestSkipFogSurface(&view,&tri,&mat);
+}
+'''.replace('POLICY', policy).replace('SURFACE', surface)
+    with tempfile.TemporaryDirectory(prefix='tdm-fog-surface-') as directory:
+        cpp = Path(directory) / 'fog.cpp'
+        library = Path(directory) / 'fog.so'
+        cpp.write_text(source)
+        subprocess.run(['g++', '-std=c++14', '-O2', '-shared', '-fPIC', '-DTDM_VR_OPENXR',
+                        '-I'+str(RENDERER.parent), str(cpp), '-o', str(library)], check=True)
+        lib = C.CDLL(str(library))
+        skip = lib.quest_fog_skip
+        skip.argtypes = [C.c_bool, C.c_bool, C.c_bool, C.c_char_p, C.c_char_p]
+        skip.restype = C.c_bool
+        yield skip
+
+
 class FogPolicyTests(unittest.TestCase):
+    def test_particle_fog_and_sheets_follow_switch_without_removing_shared_smoke(self):
+        # Actual core content identifiers: dustfog uses the SAME shotgunpuff
+        # material as ordinary smoke. Disabling that material globally is wrong.
+        cases = [
+            ('tdm_dustfog1', 'textures/sfx/shotgunpuff', True),
+            ('tdm_dustfog2', 'textures/sfx/shotgunpuff', True),
+            ('tdm_dustfog3', 'textures/sfx/shotgunpuff', True),
+            ('tdm_dustfog4', 'textures/sfx/shotgunpuff', True),
+            ('tdm_fog_overcast', 'textures/darkmod/sfx/overcast', True),
+            ('ea001_etherfog_high', 'textures/darkmod/sfx/overcast2', True),
+            ('custom_mist', 'textures/sfx/shotgunpuff', True),
+            ('map_effect', 'textures/darkmod/sfx/overcast2', True),
+            ('', 'textures/darkmod/fogs/real_fog_layer_moving', True),
+            ('', 'fogs/real_fog_moving', True),
+            ('TDM_DUSTFOG3.PRT', 'textures/sfx/shotgunpuff', True),
+            ('tdm_smoke', 'textures/sfx/shotgunpuff', False),
+            ('tdm_fire', 'textures/darkmod/sfx/fake_haze_01', False),
+            ('waterarrow', 'textures/water_source/watermist_m1add', False),
+            ('alchemist_magic', 'textures/particles/spark', False),
+            ('', 'textures/darkmod/nature/skybox/skybox_fogged_01', False),
+            ('', 'textures/darkmod/window/smallpanels_4w_dirty02_fogblend_litdull', False),
+            ('', 'lights/ambientCube/skybox_fogged_01_cube', False),
+            ('', '', False),
+        ]
+        with compiled_surface_policy() as skip:
+            for particle, material, atmosphere in cases:
+                args = (particle.encode(), material.encode())
+                with self.subTest(particle=particle, material=material):
+                    for eye in range(2):
+                        self.assertEqual(skip(True, False, False, *args), atmosphere)
+                        self.assertFalse(skip(True, True, False, *args))  # enabled
+                        self.assertFalse(skip(True, False, True, *args))  # lightgem
+                        self.assertFalse(skip(False, False, False, *args))  # flat
+
     def test_fog_off_reveals_scenery_and_preserves_lightgem(self):
         policy = method(RENDERER / 'backend/stages/MobileLightingStage.cpp', 'bool R_QuestFogDisabled(')
         portal = method(RENDERER / 'frontend/RenderWorld_portals.cpp', 'bool idRenderWorldLocal::PortalIsFoggedOut(')

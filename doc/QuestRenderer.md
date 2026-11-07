@@ -72,11 +72,18 @@ are launch-time quality controls. The defaults prioritize standalone frame time
 without lowering eye-buffer resolution or removing material effects.
 
 Quest VR fog and volumetric effects default to off (`vr_fog 0`). The launcher
-has a **Fog and light shafts (slower)** checkbox to restore them. Disabling fog
+has a **Fog, mist and light shafts (slower)** checkbox to restore them on the next
+game launch. This includes fog lights, atmospheric blend lights, fog sheets, and
+fog particle stages (including Saint Lucia's `tdm_dustfog3`). Classification is
+cached when content loads; generic smoke materials are not globally disabled.
+Particle geometry retains its fog identity through model and `func_fx` emission
+and is rejected per view before GPU uploads, so a shared lightgem/model cache
+cannot reintroduce it or lose its original geometry. Disabling fog
 also disables fog-based portal occlusion, so scenery beyond removed fog is still
 drawn. Surface lighting, shadows, and the lightgem's fog rendering are retained.
-Flat rendering keeps its existing fog settings. On older APKs,
-`+set r_volumetricEnable 0` disables volumetric effects while retaining basic fog.
+Flat rendering keeps its existing fog settings. Weapon effects, flames, ordinary
+smoke, opaque skyboxes and surface lighting stay enabled. The launcher always
+passes the checkbox value, including the off default, over archived game config.
 
 World/depth calculations and shadow samplers retain high precision, including
 when `harm_r_useMediumPrecision` is set. This includes the separate depth prepass:

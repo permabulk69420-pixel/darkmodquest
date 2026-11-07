@@ -93,6 +93,9 @@ void LightPassesStage::DrawAllBlendLights( const viewDef_t *viewDef ) {
 
 	for ( viewLight_t *vLight = viewDef->viewLights; vLight; vLight = vLight->next ) {
 		if ( vLight->lightShader->IsBlendLight() ) {
+			// Some fog materials use blendLight instead of fogLight. Keep ordinary
+			// projected lights, but remove these atmosphere-only lights as well.
+			if ( R_QuestFogDisabled(viewDef) && vLight->lightShader->IsAtmosphericFog() ) continue;
 			this->viewDef = viewDef;
 			this->vLight = vLight;
 

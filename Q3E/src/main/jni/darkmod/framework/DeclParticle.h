@@ -52,6 +52,7 @@ public:
 	//------------------------------
 
 	const idMaterial *		material;
+	bool					atmosphericFog;		// derived from particle identity, not a shared smoke texture
 
 	bool					hidden;				// for editor use
 

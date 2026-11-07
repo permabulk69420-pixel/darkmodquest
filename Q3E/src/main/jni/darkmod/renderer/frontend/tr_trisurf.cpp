@@ -579,6 +579,7 @@ srfTriangles_t *R_CopyStaticTriSurf( const srfTriangles_t *tri ) {
 	R_AllocStaticTriSurfIndexes( newTri, tri->numIndexes );
 	newTri->numVerts = tri->numVerts;
 	newTri->numIndexes = tri->numIndexes;
+	newTri->atmosphericFog = tri->atmosphericFog;
 	memcpy( newTri->verts, tri->verts, tri->numVerts * sizeof( newTri->verts[0] ) );
 	memcpy( newTri->indexes, tri->indexes, tri->numIndexes * sizeof( newTri->indexes[0] ) );
 

@@ -501,6 +501,7 @@ public:
 
 						// lightshader option to fill with fog from viewer instead of light from center
 	bool				IsFogLight() const { return fogLight; }
+	bool				IsAtmosphericFog() const { return atmosphericFog; }
 
 						// perform simple blending of the projection, instead of interacting with bumps and textures
 	bool				IsBlendLight() const { return blendLight; }
@@ -719,6 +720,7 @@ private:
 	bool				shouldCreateBackSides;
 	
 	bool				fogLight;
+	bool				atmosphericFog;		// fog sheets/overcast, classified at parse time
 	bool				blendLight;
 	bool				ambientLight;
 	bool				cubicLight;          // nbohr1more #3881: cubemap based lighting

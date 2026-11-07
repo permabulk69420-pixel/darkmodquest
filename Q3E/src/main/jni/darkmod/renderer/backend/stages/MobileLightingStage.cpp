@@ -28,7 +28,7 @@ idCVar r_questShowRenderStats( "r_questShowRenderStats", "0", CVAR_RENDERER | CV
 idCVar r_questLightScissor( "r_questLightScissor", "1", CVAR_RENDERER | CVAR_BOOL | CVAR_ARCHIVE,
 	"Clip mobile lighting, blend lights and volumetrics to bounds projected for the active eye" );
 idCVar vr_fog( "vr_fog", "0", CVAR_RENDERER | CVAR_BOOL | CVAR_ARCHIVE,
-	"Enable fog and volumetric light effects in VR. Off by default for Quest performance; lightgem rendering is unchanged." );
+	"Enable fog lights, fog particles, fog sheets and volumetric light effects in VR. Off by default; lightgem rendering is unchanged." );
 
 bool R_UseMobileLighting() {
 #ifdef TDM_VR_OPENXR
@@ -47,6 +47,10 @@ bool R_QuestFogDisabled( const viewDef_t *view ) {
 }
 
 bool R_UseQuestLightScissors() { return R_UseMobileLighting() && r_questLightScissor.GetBool(); }
+
+bool R_QuestSkipFogSurface( const viewDef_t *view, const srfTriangles_t *tri, const idMaterial *material ) {
+	return R_QuestFogDisabled(view) && (tri->atmosphericFog || material->IsAtmosphericFog());
+}
 
 MobileRenderPlan::Rect RB_QuestViewViewport( const viewDef_t *view ) {
 	const int w = frameBuffers->activeFbo->Width(), h = frameBuffers->activeFbo->Height();

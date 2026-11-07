@@ -12,6 +12,7 @@ import re
 import subprocess
 import tempfile
 import unittest
+from fog_policy_test import compiled_surface_policy
 
 ROOT = Path(__file__).resolve().parents[2]
 SHADERS = Path(os.environ.get('TDM_SHADER_SOURCE_DIR', ROOT / 'Q3E/src/main/jni/darkmod/glslprogs'))
@@ -194,6 +195,40 @@ class MobileShaderTests(unittest.TestCase):
         one=self.setup_forward(light_count=1); two=self.setup_forward(light_count=2)
         self.assertGreater(one[0],10)
         for i in range(3): self.assertAlmostEqual(two[i],2*one[i],delta=2)
+
+    def test_fog_switch_removes_soft_particle_pixels_but_preserves_smoke(self):
+        g = self.gl
+        p = g.program(source('stages/surface_passes/soft_particle.vert.glsl'),
+                      source('stages/surface_passes/soft_particle.frag.glsl'))
+        g.target();g.call('glViewport',0,0,16,16);g.call('glUseProgram',p)
+        for feature in (0x0B71,0x0B90,0x0B44,0x0C11):g.call('glDisable',feature)
+        g.call('glEnable',0x0BE2);g.call('glBlendFunc',0x0302,0x0303)
+        g.texture(0,(180,180,180,180));g.texture(1,(254,254,254,255))
+        g.uniform(p,'u_particleColorTexture',0,'i');g.uniform(p,'u_depthTexture',1,'i')
+        g.uniform(p,'u_projectionMatrix',PROJECTION,'m')
+        g.uniform(p,'u_modelViewMatrix',IDENTITY,'m')
+        g.uniform(p,'u_colorMul',[1.,1.,1.,1.]);g.uniform(p,'u_colorAdd',[0.,0.,0.,0.])
+        g.uniform(p,'u_invParticleRadius',0.5);g.uniform(p,'u_invSceneFadeCoeff',0.5)
+        g.uniform(p,'u_invDepthTextureSize',[1./16,1./16]);g.uniform(p,'u_fadeMask',[1.,1.,1.,0.])
+        g.quad()
+        def draw(skip):
+            g.call('glClearColor',0.05,0.10,0.15,1.);g.call('glClear',0x00004000)
+            if not skip:g.call('glDrawArrays',4,0,6)
+            return g.pixels(16,16)
+        background=draw(True)
+        with compiled_surface_policy() as skip:
+            material=b'textures/sfx/shotgunpuff'
+            for eye in (-0.03125,0.03125):
+                matrix=IDENTITY.copy();matrix[12]=eye
+                g.uniform(p,'u_modelViewMatrix',matrix,'m')
+                visible=draw(skip(True,True,False,b'tdm_dustfog3',material))
+                hidden=draw(skip(True,False,False,b'tdm_dustfog3',material))
+                smoke=draw(skip(True,False,False,b'tdm_smoke',material))
+                self.assertNotEqual(visible,background)
+                self.assertEqual(hidden,background)
+                self.assertEqual(smoke,visible)
+                self.assertEqual(draw(skip(True,False,True,b'tdm_dustfog3',material)),visible)
+        g.call('glDisable',0x0BE2)
     def test_eye_origin_changes_specular_shading(self):
         left=self.setup_forward(ambient=False,eye=-1.5)
         right=self.setup_forward(ambient=False,eye=1.5)

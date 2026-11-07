@@ -210,6 +210,7 @@ idRenderModel *idRenderModelPrt::InstantiateDynamicModel( const struct renderEnt
 		}
 
 		surf->geometry->tangentsCalculated = false;
+		surf->geometry->atmosphericFog = stage->atmosphericFog;
 		surf->geometry->facePlanesCalculated = false;
 		surf->geometry->numVerts = numVerts;
 		surf->geometry->numIndexes = numIndexes;

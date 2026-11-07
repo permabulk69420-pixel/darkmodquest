@@ -19,6 +19,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 
 
 #include "renderer/tr_local.h"
+#include "renderer/QuestAtmosphere.h"
 #include "renderer/resources/CinematicFFMpeg.h"
 #include "renderer/backend/GLSLProgramManager.h"
 
@@ -96,6 +97,7 @@ void idMaterial::CommonInit() {
 	shouldCreateBackSides = false;
 	entityGui = 0;
 	fogLight = false;
+	atmosphericFog = false;
 	blendLight = false;
 	ambientLight = false;
 	cubicLight = false;  //nbohr1more #3881: cubemap based lighting
@@ -2610,6 +2612,7 @@ bool idMaterial::Parse( const char *text, const int textLength ) {
 	CommonInit();
 
 	memset( &parsingData, 0, sizeof( parsingData ) );
+	atmosphericFog = QuestAtmosphere::IsFogMaterial(GetName());
 
 	pd = &parsingData;	// this is only valid during parse
 
