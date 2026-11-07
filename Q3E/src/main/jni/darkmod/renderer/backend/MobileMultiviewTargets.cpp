@@ -188,6 +188,11 @@ void MobileMultiviewTargets::Shutdown(){
 	EndFrame();auto &s=*impl;s.DestroyTargets();
 	for(auto &pair:s.images)Impl::DeleteTexture(pair.second.eye[1].texture);
 	s.images.clear();
+	// FrameBufferManager deletes its registered objects during renderer shutdown.
+	// A subsequent OpenXR initialization must register fresh targets, rather than
+	// dereferencing pointers retained from the previous GL context.
+	s.layered=nullptr;s.attach=nullptr;
+	for(int eye=0;eye<2;++eye)s.primary[eye]=s.resolve[eye]=s.gui[eye]=nullptr;
 }
 FrameBuffer *MobileMultiviewTargets::Layered()const{return impl->layered;}
 GLuint MobileMultiviewTargets::SSAOTexture()const{return impl->ssao;}

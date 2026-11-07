@@ -161,6 +161,10 @@ extern "C" const char *validate_targets(){
   require(targets.Layered()->width==24&&targets.Layered()->height==20,"layered dimensions stale");
   for(int eye=0;eye<2;++eye){targets.SelectEye(eye);manager.primaryFbo->Bind();manager.resolveFbo->Bind();}
   targets.EndFrame();targets.Shutdown();
+  // Renderer restart deletes the manager's registered FBOs before XR starts again.
+  manager.owned.clear();require(targets.BeginFrame(&empty),"renderer restart failed");
+  targets.Layered()->Bind();for(int eye=0;eye<2;++eye){targets.SelectEye(eye);manager.primaryFbo->Bind();}
+  targets.EndFrame();targets.Shutdown();
   require(glGetError()==GL_NO_ERROR,"GL error in shipping stereo target lifecycle");
   glDeleteFramebuffers(1,&read);current.PurgeImage();depth.PurgeImage();guiImage.PurgeImage();capture.PurgeImage();
   return nullptr;
@@ -200,7 +204,7 @@ class StereoTargetTests(unittest.TestCase):
                 native=C.CDLL(str(library));native.validate_targets.restype=C.c_char_p
                 result=native.validate_targets()
                 self.assertIsNone(result,result.decode() if result else '')
-                print('PASS: shipping multiview targets on real GLES preserve eye layers/captures, mutable storage, reloads, resizing, retirement and original FBO state')
+                print('PASS: shipping multiview targets on real GLES preserve eye layers/captures, mutable storage, reloads, resizing, retirement, renderer restart and original FBO state')
         finally:gl.close()
 
 if __name__=='__main__':unittest.main(verbosity=2)
