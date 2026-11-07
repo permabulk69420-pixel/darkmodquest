@@ -64,6 +64,7 @@ void DepthStage::CalcScissorParam( uint32_t scissor[4], const idScreenRect &scre
 }
 
 void DepthStage::Init() {
+	multiviewCheckedGeneration=0;multiviewReady=false;
 	depthShader = programManager->LoadFromGenerator( "depth", [=](GLSLProgram *program) { LoadShader(program); } );
 	multiviewShader = programManager->LoadFromGenerator("quest_multiview_depth",[](GLSLProgram *program){
 		idHashMapDict defines;defines["QUEST_MULTIVIEW"]="1";
@@ -72,6 +73,17 @@ void DepthStage::Init() {
 }
 
 void DepthStage::Shutdown() {}
+
+bool DepthStage::PrepareMultiview() {
+	if(!multiviewShader||!multiviewShader->EnsureLinked())return false;
+	if(multiviewCheckedGeneration!=multiviewShader->Generation()){
+		multiviewCheckedGeneration=multiviewShader->Generation();
+		multiviewReady=multiviewShader->GetUniformLocation("u_modelViewMatrix[1]")>=0&&
+			multiviewShader->GetUniformLocation("u_projectionMatrix[1]")>=0;
+		if(!multiviewReady)common->Warning("Quest multiview depth shader lacks two-eye uniforms; using separate-eye rendering. Check installed shader assets.");
+	}
+	return multiviewReady;
+}
 
 void DepthStage::DrawDepth( const viewDef_t *viewDef, drawSurf_t **drawSurfs, int numDrawSurfs, const MobileStereoView *stereo ) {
 	if ( numDrawSurfs == 0 ) {

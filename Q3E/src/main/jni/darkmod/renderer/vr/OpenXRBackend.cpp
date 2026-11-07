@@ -1343,7 +1343,8 @@ void OpenXRBackend::Impl::RenderFrame( const frameData_t *fd ) {
 			// depth and material/light packets are independent of the late eye
 			// pose: build once, before either eye starts its tile render pass.
 			renderBackend->PrepareStereoFrame( fd->cmdHead );
-			if(hasWorldView&&R_UseMobileLighting()&&vr_foveation.GetInteger()==0&&multiview.BeginFrame(fd->cmdHead)){
+			if(hasWorldView&&R_UseMobileLighting()&&vr_foveation.GetInteger()==0&&r_multiSamples.GetInteger()<=1&&
+				renderBackend->PrepareMultiview()&&multiview.BeginFrame(fd->cmdHead)){
 				reusedCameraCommands.clear();
 				ExecuteMultiview(fd);
 			} else {

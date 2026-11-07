@@ -228,6 +228,8 @@ void Bind( int unit, idImage *image ) { image->BindToUnit(unit); }
 struct MobileLightingStage::Impl {
 	GLSLProgram *lighting[8] = {}, *depth = nullptr;
 	uint64_t drawSerial = 0, configuredSerial[8] = {};
+	uint64_t multiviewCheckedGeneration[4] = {};
+	bool multiviewReady[4] = {};
 	const MobileStereoView *stereo = nullptr;
 	int multiviewPasses = 0;
 	idImageScratch *atlas = nullptr;
@@ -269,6 +271,7 @@ MobileLightingStage::~MobileLightingStage() = default;
 void MobileLightingStage::Init() {
 #ifdef TDM_VR_OPENXR
 	for(int i=0;i<8;++i) {
+		if(i>=4){impl->multiviewCheckedGeneration[i-4]=0;impl->multiviewReady[i-4]=false;}
 		const int count=1<<(i%4);
 		const idStr fragment=count==8 ? "stages/mobile/forward.frag.glsl" : va("stages/mobile/forward_%d.frag.glsl",count);
 		impl->lighting[i]=programManager->LoadFromGenerator(va("quest_%sforward_%d",i>=4?"multiview_":"",count),[fragment,i](GLSLProgram *program){
@@ -315,6 +318,21 @@ bool MobileLightingStage::CanDrawMultiview(const viewDef_t *view,const MobileMul
 	return true;
 }
 bool MobileLightingStage::HasFrame() const { return !impl->views.empty(); }
+
+bool MobileLightingStage::PrepareMultiview() {
+	for(int variant=0;variant<4;++variant){
+		auto *program=impl->lighting[variant+4];
+		if(!program||!program->EnsureLinked())return false;
+		if(impl->multiviewCheckedGeneration[variant]!=program->Generation()){
+			impl->multiviewCheckedGeneration[variant]=program->Generation();
+			impl->multiviewReady[variant]=program->GetUniformLocation("u_modelViewMatrix[1]")>=0&&
+				program->GetUniformLocation("u_projectionMatrix[1]")>=0&&program->GetUniformLocation("u_viewOrigin[1]")>=0;
+			if(!impl->multiviewReady[variant])common->Warning("Quest multiview lighting shader %s lacks two-eye uniforms; using separate-eye rendering. Check installed shader assets.",program->GetName().c_str());
+		}
+		if(!impl->multiviewReady[variant])return false;
+	}
+	return true;
+}
 
 void MobileLightingStage::GetDiagnosticsText( char *buffer, int size ) const {
 	const Impl &i = *impl;

@@ -1,3 +1,4 @@
+#pragma tdm_define "QUEST_MULTIVIEW"
 precision highp float;
 precision highp int;
 // Lighting never writes depth or stencil. Reject hidden fragments before

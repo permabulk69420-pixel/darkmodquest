@@ -13,20 +13,10 @@ import subprocess
 import tempfile
 import unittest
 from fog_policy_test import compiled_surface_policy
+from shipping_shader_source import source
 
 ROOT = Path(__file__).resolve().parents[2]
 SHADERS = Path(os.environ.get('TDM_SHADER_SOURCE_DIR', ROOT / 'Q3E/src/main/jni/darkmod/glslprogs'))
-
-def source(path):
-    seen = set()
-    def expand(name):
-        if name in seen:
-            return ''
-        seen.add(name)
-        text = (SHADERS / name).read_text()
-        text = re.sub(r'^\s*#pragma tdm_include "([^"]+)".*$', lambda m: expand(m[1]), text, flags=re.M)
-        return re.sub(r'^\s*#pragma tdm_define .*$', '', text, flags=re.M)
-    return expand(path)
 
 class GLES:
     def __init__(self):
@@ -199,7 +189,7 @@ class MobileShaderTests(unittest.TestCase):
         g=self.gl;general=self.forward
         extensions=g.fn('glGetString',C.c_char_p,C.c_uint)(0x1F03).decode()
         self.assertIn('GL_OVR_multiview2',extensions)
-        def multiview(path):return source(path).replace('#version 320 es','#version 320 es\n#define QUEST_MULTIVIEW 1',1)
+        def multiview(path):return source(path,{'QUEST_MULTIVIEW':'1'})
         depth=g.program(source('stages/depth/depth.vert.glsl'),source('stages/depth/depth.frag.glsl'))
         depth_mv=g.program(multiview('stages/depth/depth.vert.glsl'),source('stages/depth/depth.frag.glsl'))
         def array_texture(fmt,w=16,h=16,data=None):
@@ -277,6 +267,18 @@ class MobileShaderTests(unittest.TestCase):
                         self.assertLessEqual(max(abs(a-b) for a,b in zip(references[eye],actual)),1,(capacity,alpha,clip,eye))
             print('True multiview GLES: one depth + one lighting draw produce both eye layers; matches two-eye reference with asymmetric poses, SSAO, cutouts and clipping')
         finally:self.forward=general
+
+    def test_shipping_multiview_programs_expose_two_eye_uniforms(self):
+        g=self.gl;location=g.fn('glGetUniformLocation',C.c_int,C.c_uint,C.c_char_p)
+        variants=[('stages/depth/depth.vert.glsl','stages/depth/depth.frag.glsl')]
+        variants += [('stages/mobile/forward.vert.glsl',
+            'stages/mobile/forward.frag.glsl' if count==8 else f'stages/mobile/forward_{count}.frag.glsl') for count in (1,2,4,8)]
+        for vertex,fragment in variants:
+            with self.subTest(fragment=fragment):
+                program=g.program(source(vertex,{'QUEST_MULTIVIEW':'1'}),source(fragment,{'QUEST_MULTIVIEW':'1'}))
+                for name in (b'u_modelViewMatrix[1]',b'u_projectionMatrix[1]'):
+                    self.assertGreaterEqual(location(program,name),0,(fragment,name))
+                if 'mobile/' in vertex:self.assertGreaterEqual(location(program,b'u_viewOrigin[1]'),0,fragment)
     def test_batched_lights_add_without_repeating_material_draw(self):
         one=self.setup_forward(light_count=1); two=self.setup_forward(light_count=2)
         self.assertGreater(one[0],10)

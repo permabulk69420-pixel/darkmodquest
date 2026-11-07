@@ -24,12 +24,15 @@ public:
 
 	void DrawDepth( const viewDef_t *viewDef, drawSurf_t **drawSurfs, int numDrawSurfs, const struct MobileStereoView *stereo = nullptr );
 	void CaptureDepth( const viewDef_t *viewDef );
+	bool PrepareMultiview();
 
 private:
 	struct DepthUniforms;
 
 	GLSLProgram *depthShader = nullptr;
 	GLSLProgram *multiviewShader = nullptr;
+	uint64_t multiviewCheckedGeneration = 0;
+	bool multiviewReady = false;
 	const struct MobileStereoView *stereo = nullptr;
 	DepthUniforms *uniforms = nullptr;
 

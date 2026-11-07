@@ -126,7 +126,7 @@ class MultiviewPipelineTests(unittest.TestCase):
                     '-I',str(base),'-I',str(ENGINE),str(cpp),*search,'-l:libEGL.so.1','-l:libGLESv2.so.2','-o',str(library)],check=True)
                 native=C.CDLL(str(library));native.validate_pipeline.argtypes=[C.c_uint,C.c_uint,C.c_uint,C.c_int,C.c_void_p]
                 native.validate_pipeline.restype=C.c_int
-                def mv(path):return source(path).replace('#version 320 es','#version 320 es\n#define QUEST_MULTIVIEW 1',1)
+                def mv(path):return source(path,{'QUEST_MULTIVIEW':'1'})
                 general=gl.program(source('stages/mobile/forward.vert.glsl'),source('stages/mobile/forward.frag.glsl'))
                 forward=gl.program(mv('stages/mobile/forward.vert.glsl'),mv('stages/mobile/forward_1.frag.glsl'))
                 depth=gl.program(mv('stages/depth/depth.vert.glsl'),source('stages/depth/depth.frag.glsl'))

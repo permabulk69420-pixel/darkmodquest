@@ -1,4 +1,5 @@
 #version 320 es
+#pragma tdm_define "QUEST_MULTIVIEW"
 #ifdef QUEST_MULTIVIEW
 #extension GL_OVR_multiview2 : require
 layout(num_views=2) in;

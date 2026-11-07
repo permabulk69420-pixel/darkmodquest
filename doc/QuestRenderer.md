@@ -12,6 +12,18 @@ to select the late OpenXR eye matrices and eye-dependent shading. The command
 loop advances both eyes together rather than replaying the complete scene twice.
 OpenXR still acquires/submits its existing eye swapchains and HUD layer.
 
+The multiview vertex and fragment sources explicitly declare
+`#pragma tdm_define "QUEST_MULTIVIEW"`. The engine resolves supplied defines only
+at those declarations; passing a dictionary entry alone does not define it.
+Earlier APKs omitted these declarations, linked ordinary one-eye shaders and
+then attempted two-eye matrix uploads. Shader-link success and the submitted
+multiview draw count could therefore accompany missing geometry and lighting.
+The installed shader version is now 10, forcing replacement of older sources.
+Before selecting the multiview path, the renderer verifies second-eye modelview,
+projection and lighting-origin uniform locations for every program. Incompatible
+programs retain separate-eye rendering. Checks are cached by shader generation
+and repeated after reload, without adding per-draw GL queries.
+
 Selecting a multiview scene updates both the GL binding and
 `FrameBufferManager::currentRenderFbo`. Lighting stages bind that recorded target
 on entry. Previously, binding only the layered GL FBO left the recorded target on
@@ -219,6 +231,8 @@ g++ -std=c++14 -O2 -I. tests/renderer/mobile_plan_test.cpp -o /tmp/mobile-plan-t
 EGL_PLATFORM=surfaceless python3 tests/renderer/mobile_gles_test.py
 python3 bin/pack_tdm_shaders.py --check
 python3 tests/renderer/shader_install_test.py
+python3 tests/renderer/shader_preprocess_test.py
+python3 tests/renderer/multiview_program_test.py
 python3 tests/renderer/fog_policy_test.py
 python3 tests/renderer/mobile_batch_test.py
 python3 tests/renderer/mobile_submission_test.py
@@ -231,6 +245,14 @@ g++ -std=c++14 -O2 -I Q3E/src/main/jni/darkmod tests/renderer/mobile_shadow_cach
 
 The GLES tests require EGL and a GLES 3.2 driver (Mesa software rendering works).
 They compile/link the actual shipping shaders and render small offscreen targets.
+Shader preparation compiles the production `FindNextPragmaInText`,
+`ResolveIncludes`, `ResolveDefines` and token-splitting implementations; file I/O
+and the define dictionary use host fixtures. Tests supply the same define map as
+the engine, and do not inject multiview preprocessor lines into the GLSL. The
+source-variant check fails for the previously released APK's shaders. A GLES
+check verifies actual second-eye uniform locations in the linked depth program
+and all four lighting capacities. The runtime-validation fixture checks mono,
+missing and failed programs, reload invalidation and cached query counts.
 The multiview regression runs `glFramebufferTextureMultiviewOVR` on a real driver
 and compares both array layers against separate-eye depth/lighting renders for
 all four light capacities, asymmetric eye poses, distinct SSAO, cutout rejection

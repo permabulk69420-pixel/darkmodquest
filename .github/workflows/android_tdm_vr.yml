@@ -6,8 +6,8 @@
 #     (so ordinary pushes do not spend CI minutes)
 #   - manual "Run workflow" (needs this file to exist on the default branch)
 #
-# Simple phone download: Releases -> Quest 3 - Multiview Rendering Fix.
-# APK filename: TDM-Quest3-Multiview-Rendering-Fix.apk (also inside the Actions artifact).
+# Simple phone download: Releases -> Quest 3 - Multiview Shader Fix.
+# APK filename: TDM-Quest3-Multiview-Shader-Fix.apk (also inside the Actions artifact).
 
 name: Android APK - TDM only (arm64)
 
@@ -52,6 +52,8 @@ jobs:
       run: |
         python3 bin/pack_tdm_shaders.py --check
         python3 tests/renderer/shader_install_test.py
+        python3 tests/renderer/shader_preprocess_test.py
+        python3 tests/renderer/multiview_program_test.py
         python3 tests/renderer/fog_policy_test.py
         python3 tests/renderer/mobile_batch_test.py
         python3 tests/renderer/mobile_submission_test.py
@@ -70,13 +72,13 @@ jobs:
     - name: Collect APK
       run: |
         mkdir -p out
-        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest3-Multiview-Rendering-Fix.apk"
+        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest3-Multiview-Shader-Fix.apk"
         ls -la out
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Quest3-Multiview-Rendering-Fix-APK
+        name: Quest3-Multiview-Shader-Fix-APK
         path: out/*.apk
         if-no-files-found: error
         retention-days: 30
@@ -86,12 +88,12 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        tag=quest-multiview-rendering-fix
-        apk=out/TDM-Quest3-Multiview-Rendering-Fix.apk
-        notes="Quest 3 ARM64: fixes missing multiview scene lighting caused by a single-eye framebuffer being rebound at lighting-stage entry. Keeps true multiview depth and lighting. The combined GLES regression reproduces the old missing-eye lighting and verifies both corrected eye images and later material colours against reference renders. Android ARM64 build checked; on-headset results remain unverified. Source commit: ${GITHUB_SHA} (branch ${GITHUB_REF_NAME})."
+        tag=quest-multiview-shader-fix
+        apk=out/TDM-Quest3-Multiview-Shader-Fix.apk
+        notes="Quest 3 ARM64: enables the multiview shader define through the engine's production preprocessor. Previous APKs linked ordinary shaders while the renderer uploaded two-eye data. Updates installed shader sources to version 10 and checks real two-eye uniforms before enabling multiview, with separate-eye fallback for incompatible shaders. Rendering checks now use production include/define preprocessing. Android ARM64 and real GLES checks pass; on-headset results remain unverified. Source commit: ${GITHUB_SHA} (branch ${GITHUB_REF_NAME})."
         if gh release view "$tag" >/dev/null 2>&1; then
           gh release upload "$tag" "$apk" --clobber
-          gh release edit "$tag" --title "Quest 3 - Multiview Rendering Fix" --notes "$notes" --latest
+          gh release edit "$tag" --title "Quest 3 - Multiview Shader Fix" --notes "$notes" --latest
         else
-          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 - Multiview Rendering Fix" --notes "$notes" --latest
+          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 - Multiview Shader Fix" --notes "$notes" --latest
         fi

@@ -44,6 +44,7 @@ public:
 	void PrepareStereoFrame( const emptyCommand_t *commands ) { mobileLightingStage.BeginFrame(commands); }
 	void FinishStereoFrame() { mobileLightingStage.EndFrame(); }
 	MobileLightingStage &MobileLighting() { return mobileLightingStage; }
+	bool PrepareMultiview() { return depthStage.PrepareMultiview()&&mobileLightingStage.PrepareMultiview(); }
 
 	void Tonemap();
 
