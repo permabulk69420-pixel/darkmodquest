@@ -629,6 +629,12 @@ public final class Q3EContextUtils
                 if(!overwrite && file.exists())
                     continue;
 
+                // ZIP directory records are optional. In particular, shader
+                // updates can introduce directories absent from an old install.
+                File parent = file.getParentFile();
+                if(parent != null && !Q3EUtils.mkdir(parent.getAbsolutePath(), true))
+                    throw new IllegalStateException("Cannot create asset directory: " + parent);
+
                 Log.i(Q3EGlobals.CONST_Q3E_LOG_TAG, "Extracting " + tmpname + " to " + systemFolderPath);
                 Q3EUtils.Write(toFilePath, zipinputstream, 4096);
                 zipinputstream.closeEntry();

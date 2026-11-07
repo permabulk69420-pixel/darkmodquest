@@ -42,12 +42,15 @@ void GLSLProgram::Init() {
 		Destroy();
 
 	program = qglCreateProgram();
+	linked = false;
+	shaderLoadFailed = false;
 	if( program == 0 ) {
 		common->Error( "Call to glCreateProgram failed for program %s", name.c_str() );
 	}
 }
 
 void GLSLProgram::Destroy() {
+	linked = false;
 	if( currentProgram == this ) {
 		Deactivate();
 	}
@@ -108,7 +111,15 @@ bool GLSLProgram::Link() {
 	}
 
 	SetDefaultUniformBlockBindings();
-	return result;
+	linked = result && !shaderLoadFailed;
+	return linked;
+}
+
+bool GLSLProgram::EnsureLinked() {
+	if ( program == 0 ) {
+		Regenerate();
+	}
+	return linked;
 }
 
 void GLSLProgram::Activate() {
@@ -176,6 +187,7 @@ void GLSLProgram::LoadAndAttachShader( GLint shaderType, const char *sourceFile,
 
 	GLuint shader = CompileShader( shaderType, sourceFile, defines );
 	if( shader == 0) {
+		shaderLoadFailed = true;
 		common->Warning( "Failed to attach shader %s to program %s.\n", sourceFile, name.c_str() );
 		return;
 	}
@@ -414,7 +426,7 @@ GLuint GLSLProgram::CompileShader( GLint shaderType, const char *sourceFile, con
 		int length;
 		qglGetShaderiv( shader, GL_INFO_LOG_LENGTH, &length );
 		if ( !result || length > 0 ) {
-			auto log = std::make_unique<char[]>( length );
+			auto log = std::make_unique<char[]>( length + 1 );
 			qglGetShaderInfoLog( shader, length, &length, log.get() );
 			log[length] = 0;
 			if ( length > 1 ) {

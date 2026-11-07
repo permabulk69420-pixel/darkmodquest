@@ -44,6 +44,7 @@ public:
 	void BindUniformBlockLocation( unsigned int location, const char *blockName );
 
 	bool Link();
+	bool EnsureLinked();
 	bool Validate();
 
 	void LoadFromFiles( const char *vertexFile, const char *fragmentFile, const idHashMapDict &defines = {} );
@@ -77,6 +78,8 @@ private:
 
 	idStr name;
 	GLuint program;
+	bool linked = false;
+	bool shaderLoadFailed = false;
 	Generator generator;
 
 	struct ActiveUniformGroup {

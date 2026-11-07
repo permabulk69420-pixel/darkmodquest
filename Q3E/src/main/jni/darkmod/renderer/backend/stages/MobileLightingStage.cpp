@@ -191,6 +191,12 @@ bool MobileLightingStage::HasFrame() const { return !impl->views.empty(); }
 void MobileLightingStage::BeginFrame( const emptyCommand_t *commands ) {
 	EndFrame();
 	if ( !R_UseMobileLighting() || r_skipRender.GetBool() ) return;
+	// A missing/failed program must not leave the depth shader active while
+	// replaying lighting draws, which paints black geometry without lighting.
+	if ( !impl->lighting->EnsureLinked() || !impl->depth->EnsureLinked() ) {
+		common->Error("Quest lighting shaders failed to load or compile. See the shader filename and compiler error in the console log.");
+		return;
+	}
 	TRACE_GL_SCOPE( "QuestPrepareStereo" );
 	// The previous frame ends with a 2D UI pass, which disables depth testing.
 	// Reset before shared depth, not just before the subsequent eye replays.

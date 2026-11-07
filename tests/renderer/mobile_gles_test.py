@@ -12,7 +12,7 @@ import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-SHADERS = ROOT / 'Q3E/src/main/jni/darkmod/glslprogs'
+SHADERS = Path(os.environ.get('TDM_SHADER_SOURCE_DIR', ROOT / 'Q3E/src/main/jni/darkmod/glslprogs'))
 
 def source(path):
     seen = set()

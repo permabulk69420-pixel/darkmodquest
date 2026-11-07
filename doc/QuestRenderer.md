@@ -98,6 +98,7 @@ g++ -std=c++14 -O2 -I. tests/renderer/mobile_plan_test.cpp -o /tmp/mobile-plan-t
 /tmp/mobile-plan-test
 EGL_PLATFORM=surfaceless python3 tests/renderer/mobile_gles_test.py
 python3 bin/pack_tdm_shaders.py --check
+python3 tests/renderer/shader_install_test.py
 ```
 
 The GLES tests require EGL and a GLES 3.2 driver (Mesa software rendering works).
@@ -109,6 +110,21 @@ caster masks, cutout shadows, and volumetric shader linking. The depth/forward
 integration check uses `GL_EQUAL` with nonintegral near/distant geometry and
 asymmetric eye projections.
 They do not emulate the headset compositor or measure Quest frame times.
+
+The install check requires a JDK and compiles the production Java ZIP extraction
+and file-copy method bodies, with only Android asset access and logging stubbed.
+It verifies a fresh installation, an upgrade with the old shader directory
+layout, and a ZIP without explicit directory entries. This catches a packaging
+failure that isolated shader compilation cannot: missing parent directories
+previously stopped extraction before the new mobile shaders were installed.
+The APK workflow runs this check before building. Set `SHADER_INSTALL_APK` to
+an APK path to check its bundled archive. `TDM_SHADER_INSTALL_DIR` can retain the
+fresh install; set `TDM_SHADER_SOURCE_DIR` to its `glslprogs` directory when
+running the GLES checks to render from installed files.
+
+The mobile frame preparation requires both mobile programs to link before any
+lighting draws. A missing or failed shader reports an error instead of replaying
+draws with the depth program still active and producing black surfaces.
 
 `bin/pack_tdm_shaders.py` regenerates the Android shader archive deterministically.
 The shader patch version was bumped so existing installations extract the new

@@ -6,8 +6,8 @@
 #     (so ordinary pushes do not spend CI minutes)
 #   - manual "Run workflow" (needs this file to exist on the default branch)
 #
-# Simple phone download: Releases -> Quest 3 APK (latest successful build).
-# Direct stable URL: https://github.com/permabulk69420-pixel/darkmodquest/releases/download/quest-apk/TDM-Quest-arm64.apk
+# Simple phone download: Releases -> Quest 3 - Latest Fix APK.
+# APK filename: TDM-Quest3-Latest-Fix.apk (also inside the Actions artifact).
 
 name: Android APK - TDM only (arm64)
 
@@ -51,6 +51,7 @@ jobs:
     - name: Build APK (TDM only, arm64-v8a)
       run: |
         python3 bin/pack_tdm_shaders.py --check
+        python3 tests/renderer/shader_install_test.py
         chmod +x ./gradlew
         # every game except The Dark Mod is switched off so only TDM's native library is compiled
         OFF="-DGAME_DOOM3=OFF,-DGAME_RTCW=OFF,-DGAME_QUAKE3=OFF,-DGAME_QUAKE2=OFF,-DGAME_QUAKE1=OFF"
@@ -63,13 +64,13 @@ jobs:
     - name: Collect APK
       run: |
         mkdir -p out
-        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest-arm64.apk"
+        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest3-Latest-Fix.apk"
         ls -la out
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
-        name: tdm-quest-apk-${{ github.sha }}
+        name: Quest3-Latest-Fix-APK
         path: out/*.apk
         if-no-files-found: error
         retention-days: 30
@@ -80,11 +81,11 @@ jobs:
       run: |
         set -euo pipefail
         tag=quest-apk
-        apk=out/TDM-Quest-arm64.apk
+        apk=out/TDM-Quest3-Latest-Fix.apk
         notes="Latest successful Quest 3 ARM64 build. Source commit: ${GITHUB_SHA} (branch ${GITHUB_REF_NAME}). This download is automatically replaced after the next successful [apk] build."
         if gh release view "$tag" >/dev/null 2>&1; then
           gh release upload "$tag" "$apk" --clobber
-          gh release edit "$tag" --title "Quest 3 APK (latest successful build)" --notes "$notes"
+          gh release edit "$tag" --title "Quest 3 - Latest Fix APK" --notes "$notes" --latest
         else
-          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 APK (latest successful build)" --notes "$notes"
+          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 - Latest Fix APK" --notes "$notes" --latest
         fi

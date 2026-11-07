@@ -35,7 +35,8 @@ namespace {
 			program->AttachGeometryShader( geometrySource, defines );
 		}
 		vaState.BindAttributesToProgram( program );
-		program->Link();
+		if ( !program->Link() )
+			return;
 		program->Activate();
 		int mv = program->GetUniformLocation( "u_modelViewMatrix" );
 		if ( mv >= 0 )
