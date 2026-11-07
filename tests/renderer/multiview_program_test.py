@@ -43,6 +43,7 @@ struct DepthStage{
  GLSLProgram *multiviewShader=nullptr;uint64_t multiviewCheckedGeneration=0;bool multiviewReady=false;
  bool PrepareMultiview();
 };
+struct{bool enabled=true;bool GetBool()const{return enabled;}}r_questMixedPrecision;
 struct MobileLightingStage{
  struct Impl{GLSLProgram *lighting[12]={},*depth=nullptr;uint64_t multiviewCheckedGeneration[4]={};bool multiviewReady[4]={};};
  Impl *impl;bool PrepareMultiview();void Init();
@@ -85,6 +86,8 @@ int main(){
  MobileLightingStage::Impl registered;MobileLightingStage registration{&registered};registration.Init();
  for(int i=0;i<12;++i){assert(registered.lighting[i]);assert(registered.lighting[i]->stereoDefine==(i>=4&&i<8));
   assert(registered.lighting[i]->fullDefine==(i>=8));}
+ r_questMixedPrecision.enabled=false;registration.Init();
+ for(int i=0;i<12;++i)assert(registered.lighting[i]->fullDefine);
  std::puts("PASS: production multiview/array-tonemap validation rejects stale/missing/failed programs, refreshes on reload and skips repeated GL queries");
 }
 '''

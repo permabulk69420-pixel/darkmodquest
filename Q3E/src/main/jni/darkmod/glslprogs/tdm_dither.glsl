@@ -25,8 +25,8 @@ float BAYER8_MATRIX[64] = float[](
 	63.0, 31.0, 55.0, 23.0, 61.0, 29.0, 53.0, 21.0
 );
 
-float ditherFractionBayer8() {
-	int x = int(gl_FragCoord.x), y = int(gl_FragCoord.y);
+float ditherFractionBayer8(vec2 pixelCoord) {
+	int x = int(pixelCoord.x), y = int(pixelCoord.y);
 	return BAYER8_MATRIX[8 * (x&7) + (y&7)] / 64.0;
 }
 

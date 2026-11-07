@@ -1,12 +1,18 @@
 /* The Dark Mod GPL Source Code. See LICENSE.txt for license terms. */
 #pragma once
 #include "renderer/backend/MobileRenderPlan.h"
+#include <cstdint>
+#include <map>
+class FrameBuffer;
 
 // Hardware variable-rate shading changes fragment frequency, never the eye
 // image dimensions or the depth/stencil sample grid. Only lighting uses it.
 class MobileFoveation {
 public:
 	void BeginFrame();
+	// Prepare attachment/storage before any depth or colour draw to the target.
+	void PrepareTarget(const MobileRenderPlan::Rect &viewport,const float *leftProjection,
+		const float *rightProjection,int samples,bool mainView,FrameBuffer *target);
 	void BeginLighting(const MobileRenderPlan::Rect &viewport, const float *leftProjection,
 		const float *rightProjection, int samples, bool mainView);
 	bool UsesDrawRates() const { return drawing && !mapped; }
@@ -29,10 +35,14 @@ private:
 	unsigned mapTexture = 0, currentRate = 0;
 	int tileSize = 0, mapWidth = 0, mapHeight = 0, cachedLevel = 0, cachedSamples = 0;
 	int level = 0, reducedDraws = 0, fullDraws = 0, mappedPasses = 0;
-	int gpuWidth = 0, gpuHeight = 0;
+	int gpuWidth = 0, gpuHeight = 0, attachmentUpdates = 0;
 	MobileRenderPlan::Rect viewport, cachedViewport;
 	float centres[2][2] = {}, cachedCentres[2][2] = {};
+	struct TargetState { uint64_t generation=0;unsigned texture=0; };
+	std::map<FrameBuffer *,TargetState> preparedTargets;
+	FrameBuffer *preparedTarget=nullptr;
+	bool prepared=false;
 	void Init();
-	bool BindMap(int samples);
+	bool PrepareMap(int samples,FrameBuffer *target);
 	void SetRate(unsigned value);
 };

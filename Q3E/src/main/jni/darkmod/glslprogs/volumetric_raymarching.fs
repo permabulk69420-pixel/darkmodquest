@@ -57,7 +57,7 @@ vec3 calcWithSampling(vec3 rayStart, vec3 rayVec, float minParam, float maxParam
 	for (int i = 0; i < samplesNum; i++) { 
 		float frac = 0.5;
 		if (u_randomize != 0)
-			frac = ditherFractionBayer8();
+			frac = ditherFractionBayer8(gl_FragCoord.xy);
 		float ratio = (float(i) + frac) / float(samplesNum);
 		vec3 samplePos = rayStart + rayVec * mix(minParam, maxParam, ratio);
 		// shadow test
@@ -139,7 +139,7 @@ void main() {
 		float alpha = mix(exponential, 1.0, transition);
 		//add a bit of unscientific dithering to smoothen out color banding
 		if (u_randomize != 0)
-			alpha = min(alpha + 1e-2 * ditherFractionBayer8(), 1.0);
+			alpha = min(alpha + 1e-2 * ditherFractionBayer8(gl_FragCoord.xy), 1.0);
 		fragColor.a = alpha;
 	}
 }

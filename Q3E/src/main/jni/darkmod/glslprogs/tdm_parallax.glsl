@@ -82,12 +82,12 @@ vec3 scaleTexcoordOffsetToModelSpace(vec3 offset, vec2 texcoords, vec3 positionM
 float computeParallaxShadow(
 	sampler2D heightmap, vec2 heightScale,
 	vec2 texcoords, vec3 tcOffset, vec3 lightDirLocal,
-	int shadowSteps, float shadowSoftness
+	int shadowSteps, float shadowSoftness, vec2 pixelCoord
 ) {
 	// x < y (even if input parameter is inverted)
 	vec2 hgtRange = vec2(min(heightScale.x, heightScale.y), max(heightScale.x, heightScale.y));
 
-	float randomizer = 0.5 + ditherFractionBayer8();
+	float randomizer = 0.5 + ditherFractionBayer8(pixelCoord);
 
 	// fix LOD level for the whole parallax computation
 	// texture samples are much faster without all the filtering

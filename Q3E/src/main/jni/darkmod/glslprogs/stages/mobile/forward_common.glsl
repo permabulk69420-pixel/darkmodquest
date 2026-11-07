@@ -32,9 +32,11 @@ uniform vec3 u_viewOrigin;
 #endif
 uniform vec4 u_clipPlane;
 uniform vec2 u_renderResolution, u_ambientParams;
+uniform highp vec4 u_ssaoViewport;
 uniform int u_flags, u_lightCount, u_lightFlags[QUEST_LIGHT_CAPACITY], u_lightTextureSet[QUEST_LIGHT_CAPACITY], u_shadowFilter;
 uniform vec3 u_lightOrigin[QUEST_LIGHT_CAPACITY];
 uniform vec4 u_diffuseColor[QUEST_LIGHT_CAPACITY], u_specularColor[QUEST_LIGHT_CAPACITY];
+uniform highp float u_lightColorScale[QUEST_LIGHT_CAPACITY];
 uniform mat4 u_lightProjection[QUEST_LIGHT_CAPACITY], u_shadowProjection[QUEST_LIGHT_CAPACITY];
 uniform vec4 u_lightTextureMatrix[2*QUEST_LIGHT_CAPACITY], u_shadowPage[QUEST_LIGHT_CAPACITY], u_shadowParams[QUEST_LIGHT_CAPACITY];
 uniform vec4 u_bumpMatrix[2], u_diffuseMatrix[2], u_specularMatrix[2];
@@ -45,7 +47,14 @@ in vec2 texNormal, texDiffuse, texSpecular, texParallax, texCoord;
 in vec3 positionModel, positionWorld, viewLocal;
 in mat3 tangentToModel;
 in vec4 vertexColor;
+in highp vec3 questScreen;
 out vec4 fragColor;
+
+// Keep all screen-space lookups free of static gl_FragCoord use, including
+// the parallax helper, so EXT VRS does not force full-rate lighting.
+highp vec2 questFramebufferUV() {
+    return (questScreen.xy / questScreen.z * 0.5 + 0.5) * u_ssaoViewport.zw + u_ssaoViewport.xy;
+}
 
 vec4 illuminate(int i, sampler2D projectionTexture, samplerCube projectionCube, sampler2D falloffTexture,
                 samplerCube ambientDiffuse, samplerCube ambientSpecular,
@@ -66,10 +75,11 @@ vec4 illuminate(int i, sampler2D projectionTexture, samplerCube projectionCube, 
         vec4 color = computeAmbientInteraction(geom, u_diffuseColor[i].rgb, diffuseTexel, u_specularColor[i].rgb, specularTexel,
             vertexColor.rgb, checkFlag(flags, SFL_LIGHT_AMBIENT_HAS_DIFFUSE_CUBEMAP), checkFlag(flags, SFL_LIGHT_AMBIENT_HAS_SPECULAR_CUBEMAP),
             ambientDiffuse, ambientSpecular, u_ambientParams.x, u_ambientParams.y);
+        highp vec2 aoCoord = questFramebufferUV();
 #ifdef QUEST_MULTIVIEW
-        float ao = checkFlag(flags, SFL_LIGHT_AMBIENT_HAS_SSAO) ? texture(u_ssaoTexture, vec3(gl_FragCoord.xy / u_renderResolution, float(questEye))).r : 1.0;
+        float ao = checkFlag(flags, SFL_LIGHT_AMBIENT_HAS_SSAO) ? texture(u_ssaoTexture, vec3(aoCoord, float(questEye))).r : 1.0;
 #else
-        float ao = checkFlag(flags, SFL_LIGHT_AMBIENT_HAS_SSAO) ? texture(u_ssaoTexture, gl_FragCoord.xy / u_renderResolution).r : 1.0;
+        float ao = checkFlag(flags, SFL_LIGHT_AMBIENT_HAS_SSAO) ? texture(u_ssaoTexture, aoCoord).r : 1.0;
 #endif
         return vec4(lightColor * ao * color.rgb, color.a);
     }
@@ -77,10 +87,13 @@ vec4 illuminate(int i, sampler2D projectionTexture, samplerCube projectionCube, 
     InteractionGeometry geom = computeInteractionGeometry(toLight, viewLocal - scaledOffset, normal);
     vec3 color = questAdvancedInteraction(geom, u_diffuseColor[i].rgb, diffuseTexel,
         u_specularColor[i].rgb, specularTexel, vertexColor.rgb, checkFlag(u_flags, SFL_INTERACTION_BUMPMAP_LIGHT_TOGGLING_FIX));
+#ifndef QUEST_FULL_PRECISION_LIGHTING
+    color *= u_lightColorScale[i];
+#endif
     float parallaxShadow = 1.0;
     if (checkFlag(u_flags, SFL_SURFACE_HAS_PARALLAX_TEXTURE) && u_parallaxIterations.z > 0)
         parallaxShadow = computeParallaxShadow(u_parallaxTexture, u_parallaxHeightScale, texParallax, offset, toLight,
-                                              u_parallaxIterations.z, u_parallaxShadowSoftness);
+                                              u_parallaxIterations.z, u_parallaxShadowSoftness, questFramebufferUV() * u_renderResolution);
     vec3 worldOffset = checkFlag(u_flags, SFL_INTERACTION_PARALLAX_OFFSET_EXTERNAL_SHADOWS)
         ? mat3(u_modelMatrix) * tangentToModel * scaledOffset : vec3(0.0);
     // Bias from geometric normals avoids normal-map-dependent shadow acne.

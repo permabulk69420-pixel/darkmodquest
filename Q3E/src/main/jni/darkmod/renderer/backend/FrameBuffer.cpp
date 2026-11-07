@@ -23,6 +23,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #include "renderer/backend/stages/AmbientOcclusionStage.h"
 #include "renderer/backend/stages/BloomStage.h"
 #include "renderer/backend/FrameBufferManager.h"
+#include "renderer/QuestRenderDiagnostics.h"
 
 FrameBuffer::FrameBuffer( const idStr &name, const Generator &generator ) {
 	this->name = name;
@@ -100,6 +101,7 @@ void FrameBuffer::InvalidateDepthStencil() {
 	BindDraw();
 	const GLenum attachments[]={GL_DEPTH_ATTACHMENT,GL_STENCIL_ATTACHMENT};
 	qglInvalidateFramebuffer(GL_DRAW_FRAMEBUFFER,2,attachments);
+	++questRenderCounters.depthDiscards;
 #endif
 }
 

@@ -17,6 +17,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 
 #include "renderer/tr_local.h"
 #include "renderer/backend/FrameBufferManager.h"
+#include "renderer/QuestRenderDiagnostics.h"
 #include "renderer/backend/FrameBuffer.h"
 #include "renderer/vr/OpenXRBackend.h"
 
@@ -234,6 +235,7 @@ void FrameBufferManager::UpdateCurrentDepthCopy() {
 	TRACE_GL_SCOPE( "UpdateCurrentDepthCopy" );
 	currentRenderFbo->BlitTo( resolveFbo, GL_DEPTH_BUFFER_BIT, GL_NEAREST );
 	backEnd.pc.c_copyDepthBuffer++;
+	++questRenderCounters.sceneDepthCopies;
 }
 
 void FrameBufferManager::CopyRender( const copyRenderCommand_t &cmd ) {

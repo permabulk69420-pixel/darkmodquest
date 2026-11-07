@@ -18,7 +18,7 @@ at those declarations; passing a dictionary entry alone does not define it.
 Earlier APKs omitted these declarations, linked ordinary one-eye shaders and
 then attempted two-eye matrix uploads. Shader-link success and the submitted
 multiview draw count could therefore accompany missing geometry and lighting.
-The installed shader version is now 12, forcing replacement of older sources.
+The installed shader version is now 13, forcing replacement of older sources.
 Before selecting the multiview path, the renderer verifies second-eye modelview,
 projection and lighting-origin uniform locations for every program. Incompatible
 programs retain separate-eye rendering. Checks are cached by shader generation
@@ -46,6 +46,14 @@ this does not claim every rendering pass has been converted to multiview.
 
 ## Tile memory, copies and precision
 
+The launcher exposes independent **Optimized framebuffer copies** and
+**Mixed-precision lighting** checkboxes, both enabled by default and applied at
+game launch. Disabling the first restores early depth capture, the intermediate
+colour-copy tonemap path and retained depth/stencil. Disabling the second selects
+the original full-precision BRDF for all scene variants. The existing diagnostics
+overlay reports the selected paths and actual depth copies, direct tonemaps and
+depth invalidations, counted at the operations rather than inferred from settings.
+
 With SSAO off, shared scene depth and lighting are consecutive draws to the same
 layered framebuffer. Per-eye depth capture now runs after lighting, immediately
 before the eye's material/effect passes. Soft particles and refraction still
@@ -71,7 +79,10 @@ the 2D path, with interface checks cached by program generation. Forced black
 output needs no scene copy. HUD rendering remains in its separate XR layer.
 
 The scene BRDF uses mediump only for bounded normalized directions, diffuse
-angular terms, Fresnel/rim factors and vertex-colour lighting weights. Direction
+angular terms, Fresnel/rim factors and RGB vertex-colour lighting weights. Direct
+light RGB parameters are normalized on the CPU before conversion to mediump;
+their brightness scale is restored in high precision after evaluating the BRDF.
+Ambient RGB parameters retain their original range and gamma evaluation. Direction
 normalization, glossy half-vector dot/power, positions, transforms, shadow
 coordinates/tests, parallax, HDR/material colours and light accumulation retain
 high precision. The blanket mobile/depth precision exemption remains in place.
@@ -82,7 +93,8 @@ original interaction equations, hard-shadow policy and gamma handling.
 actual colour-blit/2D path for both eyes and postprocess settings. Its BRDF checks
 compare the mixed shader, original equations and an additional variant with
 explicit half-float assignment rounding. Across the fixed lighting/view/normal
-cases, the maximum observed colour difference is 1/255. This does not guarantee
+cases, including bright light parameters, the checks bound colour differences.
+This does not guarantee
 identical Quest driver precision or establish GPU cycle savings. Production
 scheduler fixtures check capture/effect/discard order with SSAO on/off, direct
 output, bloom, scaling, shader rejection and forced-black output. Android ARM64
@@ -104,7 +116,20 @@ is cached by dimensions, viewport, level, sample count and projection centres.
 Supported rates are queried for the active sample count. Low requests 1x2 outside
 the protected centre; Medium requests 2x2; High permits 4x2 at the outer corners.
 Unsupported rates retain a finer supported rate. Depth/stencil coverage and tests
-remain per pixel. Map binding/combining is limited to the main lighting pass.
+remain per pixel. Map storage and attachments are prepared before clearing or
+drawing scene depth, then retained on each framebuffer across lighting and later
+frames. Only the combiner changes during lighting. The cache checks the actual
+framebuffer generation, so recreation reattaches once. The diagnostics report
+actual target updates; a steady target normally needs none after warm-up.
+
+EXT VRS can force full-rate shading when a fragment shader statically uses
+`gl_FragCoord` without its matching GLSL extension, even if the rate-map API is
+available. Scene lighting reconstructs screen coordinates from high-precision
+interpolated clip XY/W and the active viewport. Both SSAO and parallax-shadow
+dithering use these coordinates, including all shared helpers. Positions, depth
+and the invariant depth/lighting projection remain unchanged. Pixel checks cover
+perspective interpolation and an offset viewport. Removing this documented
+full-rate condition does not measure the effective rate on every Quest fragment.
 
 On Quest drivers exposing only `GL_QCOM_shading_rate`, a conservative draw-rate
 path uses the intersection of projected geometry bounds and existing light
@@ -114,7 +139,7 @@ fetches or shader branches. Wide surfaces crossing the centre retain full rate,
 so savings are more limited than a spatial map and depend on the scene. The
 driver may choose a finer effective rate than requested. Mirror, camera, portal
 sky, lightgem, shadow, material/effect and UI passes retain full-rate shading.
-The controller resets the hardware rate and detaches maps before leaving lighting.
+The controller resets the hardware rate and combiner before leaving lighting.
 
 This replaces the old `GL_QCOM_texture_foveated` path completely. That extension
 scales depth/stencil along with colour and warns that resolved depth can cause
@@ -128,7 +153,8 @@ mechanisms; it does not establish the exact cause of every reported black bar.
 
 The existing diagnostics overlay reports OFF, UNAVAILABLE, SPATIAL VRS, DRAW VRS
 or idle. For QCOM draw rates it also reports coarse/total lighting draw requests
-and their percentage; spatial-map drivers report map passes instead. Draw
+and their percentage; spatial-map drivers report lighting passes and target
+attachment updates instead. Draw
 fractions are not pixel coverage: occlusion and screen area affect the savings.
 A low coarse-draw fraction can explain a small benefit even at High, because
 large meshes crossing the centre remain at full rate. CPU-limited scenes can
@@ -148,7 +174,10 @@ foveation initializes, adds no per-frame readback and exports no files.
 `mobile_foveation_test.py` compiles the production controller with recorded
 vendor entry points and real GLES target/map allocation. It checks both-eye
 centre protection, offsets, map encoding, capability rejection, renderer restart,
-draw percentages and GL state restoration. `mobile_vrs_probe_test.py` checks the
+draw percentages, persistent attachments and GL state restoration.
+`vr_settings_test.py` runs the production Java preference mapping and command
+parser with all checkbox combinations, including explicit off values overriding
+saved commands. `mobile_vrs_probe_test.py` checks the
 production probe's actual GLES execution and state restoration using a constant
 encoded-result shader fixture. It separately runs the embedded vendor shader;
 Mesa without the required interface must report unverified, not invented coarse

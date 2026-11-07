@@ -1079,7 +1079,8 @@ void OpenXRBackend::Impl::ExecuteMultiview(const frameData_t *fd){
 			backEnd.viewDef=view;
 			const bool shared=eyes[0].primary&&eyes[1].primary&&renderBackend->MobileLighting().CanDrawMultiview(view,multiview)&&
 				!r_skipRender.GetBool()&&!r_skipRenderContext.GetBool();
-			const bool earlyDepth=shared&&ambientOcclusion->ShouldEnableForCurrentView();
+			const bool aoNeeded=shared&&ambientOcclusion->ShouldEnableForCurrentView();
+			const bool earlyDepth=shared&&(aoNeeded||!R_QuestFramebufferOptimizations());
 			MobileStereoView stereo;
 			if(shared){
 				for(int eye=0;eye<2;++eye){
@@ -1091,7 +1092,7 @@ void OpenXRBackend::Impl::ExecuteMultiview(const frameData_t *fd){
 				multiview.BindScene();renderBackend->DrawMultiviewDepth(view,eyes[0].background,stereo);
 				if(earlyDepth)for(int eye=0;eye<2;++eye){
 					UpdateViewForEye(view,eye,false);select(eye);renderBackend->CaptureDepth(view);
-					ambientOcclusion->ComputeSSAOFromDepth();ambientOcclusion->CopySSAOToLayer(multiview.SSAOTexture(),eye);
+					if(aoNeeded){ambientOcclusion->ComputeSSAOFromDepth();ambientOcclusion->CopySSAOToLayer(multiview.SSAOTexture(),eye);}
 					save(eye);
 				}
 				stereo.ssaoTexture=multiview.SSAOTexture();multiview.BindScene();
@@ -1108,7 +1109,7 @@ void OpenXRBackend::Impl::ExecuteMultiview(const frameData_t *fd){
 				renderBackend->DrawView(view,eyes[eye].background,shared);
 				// The next world view clears its own depth. Captured depth lives
 				// in a separate resolve texture; colour/mirror copies still work.
-				if(eyes[eye].primary&&frameBuffers->currentRenderFbo==frameBuffers->primaryFbo)
+				if(R_QuestFramebufferOptimizations()&&eyes[eye].primary&&frameBuffers->currentRenderFbo==frameBuffers->primaryFbo)
 					frameBuffers->primaryFbo->InvalidateDepthStencil();
 				eyes[eye].background=view->outputColorIsBackground;save(eye);
 			}
@@ -1126,7 +1127,7 @@ void OpenXRBackend::Impl::ExecuteMultiview(const frameData_t *fd){
 			case RC_BLOOM:if(RB_Bloom((bloomCommand_t *)cmd)){FB_DebugShowContents();frameBuffers->LeavePrimary();}break;
 			case RC_TONEMAP:{
 				if(!((const tonemapCommand_t *)cmd)->forceOutputToBlack){
-					const bool direct=frameBuffers->currentRenderFbo==frameBuffers->primaryFbo&&multiview.CanTonemapDirectly()&&
+					const bool direct=R_QuestFramebufferOptimizations()&&frameBuffers->currentRenderFbo==frameBuffers->primaryFbo&&multiview.CanTonemapDirectly()&&
 						renderBackend->TonemapSceneLayer(multiview.ColorTexture(),eye);
 					if(!direct){frameBuffers->LeavePrimary();renderBackend->Tonemap();}
 				}else {
@@ -1406,6 +1407,8 @@ void OpenXRBackend::Impl::UpdateDiagnostics( const frameData_t *fd ) {
 		"%s\n%s"
 		"CPU ms: game %d | frontend %d | XR wait %.1f | SMP %s\n"
 		"Render CPU ms: prep %.1f | depth %.1f | light %.1f\n"
+		"Framebuffer copies: %s | depth %d | direct tone %d | discarded %d\n"
+		"Lighting precision: %s | positions/shadows/lightgem FULL\n"
 		"Views: main %d sky %d mirror %d other %d | camera reuse %d\n"
 		"Shaders: %d linked | %d FAILED | %d unused\n"
 		"Shader failure: %.54s\n"
@@ -1420,7 +1423,10 @@ void OpenXRBackend::Impl::UpdateDiagnostics( const frameData_t *fd ) {
 		++diagnosticsFrame, eyeWidth, eyeHeight, displayPeriod > 0 ? 1e9 / double(displayPeriod) : 0.0,
 		timing, mobile,
 		fd->questGameMsec, fd->questFrontendMsec, timer.WaitMs(), com_smp.GetBool() ? "ON" : "OFF",
-		c.prepareCpuMs, c.depthCpuMs, c.lightingCpuMs, mainViews, skyViews, mirrorViews, otherViews, int(reusedCameraCommands.size()/2),
+		c.prepareCpuMs, c.depthCpuMs, c.lightingCpuMs,
+		R_QuestFramebufferOptimizations()?"OPTIMIZED":"BASELINE",c.sceneDepthCopies,c.directTonemaps,c.depthDiscards,
+		cvarSystem->GetCVarBool("r_questMixedPrecision")?"MIXED weights":"FULL",
+		mainViews, skyViews, mirrorViews, otherViews, int(reusedCameraCommands.size()/2),
 		linked, failed, unused, firstFailure.IsEmpty() ? "none" : firstFailure.c_str(),
 		!fog ? (fogDraws ? "FAIL: unexpected draws" : "OFF") : fogDraws ? "ACTIVE" : "IDLE: no fog draws",
 		hidden, c.fogSurfaceDraws, c.fogLightPasses, c.blendFogPasses,

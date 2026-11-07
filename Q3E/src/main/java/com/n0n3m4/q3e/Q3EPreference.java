@@ -63,6 +63,8 @@ public final class Q3EPreference
     public static final String pref_vr_show_perf                  = "q3e_vr_show_perf";
     public static final String pref_vr_fog                        = "q3e_vr_fog";
     public static final String pref_vr_renderer_diagnostics       = "q3e_vr_renderer_diagnostics";
+    public static final String pref_vr_framebuffer_optimizations  = "q3e_vr_framebuffer_optimizations";
+    public static final String pref_vr_mixed_precision            = "q3e_vr_mixed_precision";
     public static final String pref_vr_hud_height                 = "q3e_vr_hud_height"; // cm
     public static final String pref_vr_hud_distance               = "q3e_vr_hud_distance"; // cm
     public static final String pref_vr_hud_offset                 = "q3e_vr_hud_offset"; // cm

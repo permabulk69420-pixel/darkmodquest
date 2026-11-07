@@ -100,7 +100,7 @@ vec3 computeInteraction(out InteractionGeometry props, out vec3 worldParallax) {
 		parallaxSelfShadow = computeParallaxShadow(
 			u_parallaxTexture, u_parallaxHeightScale,
 			var_TexParallax, offset, lightDirLocal,
-			u_parallaxIterations.z, u_parallaxShadowSoftness
+			u_parallaxIterations.z, u_parallaxShadowSoftness, gl_FragCoord.xy
 			);
 	}
 	else {

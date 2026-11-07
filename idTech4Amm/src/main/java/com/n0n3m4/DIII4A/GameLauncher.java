@@ -2199,6 +2199,12 @@ public class GameLauncher extends Activity
 		SetupVRSpinner(V.vr_hud_offset, R.array.vr_hud_offset_values, Q3EPreference.pref_vr_hud_offset, -20);
 
 		final SharedPreferences vrPrefs = PreferenceManager.getDefaultSharedPreferences(this);
+		V.vr_framebuffer_optimizations.setChecked(vrPrefs.getBoolean(Q3EPreference.pref_vr_framebuffer_optimizations, true));
+		V.vr_framebuffer_optimizations.setOnCheckedChangeListener((button, checked) ->
+			vrPrefs.edit().putBoolean(Q3EPreference.pref_vr_framebuffer_optimizations, checked).commit());
+		V.vr_mixed_precision.setChecked(vrPrefs.getBoolean(Q3EPreference.pref_vr_mixed_precision, true));
+		V.vr_mixed_precision.setOnCheckedChangeListener((button, checked) ->
+			vrPrefs.edit().putBoolean(Q3EPreference.pref_vr_mixed_precision, checked).commit());
 		V.vr_renderer_diagnostics.setChecked(vrPrefs.getBoolean(Q3EPreference.pref_vr_renderer_diagnostics, false));
 		V.vr_renderer_diagnostics.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
 			@Override
@@ -5113,6 +5119,8 @@ public class GameLauncher extends Activity
 		public CheckBox vr_show_perf;
 		public CheckBox vr_fog;
 		public CheckBox vr_renderer_diagnostics;
+		public CheckBox vr_framebuffer_optimizations;
+		public CheckBox vr_mixed_precision;
 		public LinearLayout fteqw_section;
 		public RadioGroup fteqw_vid_renderer;
 		public SeekBar consoleHeightFracValue;
@@ -5331,6 +5339,8 @@ public class GameLauncher extends Activity
 			tdm_useMediumPrecision = findViewById(R.id.tdm_useMediumPrecision);
 			vr_resolution_scale = findViewById(R.id.vr_resolution_scale);
 			vr_foveation = findViewById(R.id.vr_foveation);
+			vr_framebuffer_optimizations = findViewById(R.id.vr_framebuffer_optimizations);
+			vr_mixed_precision = findViewById(R.id.vr_mixed_precision);
 			vr_refresh_rate = findViewById(R.id.vr_refresh_rate);
 			vr_hud_height = findViewById(R.id.vr_hud_height);
 			vr_hud_distance = findViewById(R.id.vr_hud_distance);

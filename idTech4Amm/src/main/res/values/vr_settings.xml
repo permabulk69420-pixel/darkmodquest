@@ -9,6 +9,8 @@
     <string name="vr_show_perf_label" translatable="false">Show performance info on the HUD (fps, CPU and GPU time per frame)</string>
     <string name="vr_fog_label" translatable="false">Fog and mist (slower)</string>
     <string name="vr_renderer_diagnostics_label" translatable="false">Show renderer diagnostics overlay</string>
+    <string name="vr_framebuffer_optimizations_label" translatable="false">Optimized framebuffer copies</string>
+    <string name="vr_mixed_precision_label" translatable="false">Mixed-precision lighting (off = full precision)</string>
     <string name="vr_hud_height_label" translatable="false">HUD / menu screen size</string>
     <string name="vr_hud_distance_label" translatable="false">HUD / menu screen distance</string>
     <string name="vr_hud_offset_label" translatable="false">HUD / menu screen height offset</string>

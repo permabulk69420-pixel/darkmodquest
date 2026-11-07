@@ -14,12 +14,13 @@ import subprocess
 import tempfile
 import unittest
 from mobile_gles_test import GLES
-from mobile_multiview_targets_test import ENGINE, MOCKS
+from mobile_multiview_targets_test import ENGINE, MOCKS, FBO, MANAGER
 
 SOURCE=ENGINE/'renderer/backend/MobileFoveation.cpp'
 HARNESS=r'''
 #include "renderer/tr_local.h"
 #include "renderer/backend/MobileFoveation.h"
+#include "renderer/backend/FrameBufferManager.h"
 #include "renderer/backend/MobileVrsProbe.h"
 // Controller contract tests inject the startup probe result; the probe's real
 // GLES execution/state restoration is tested in mobile_vrs_probe_test.py.
@@ -28,7 +29,7 @@ struct Console{void Printf(const char *,...){}void Warning(const char *,...) {}}
 static int mode=0,rateCalls=0,querySamples=0;
 static bool failMap=false,coarse4=true;
 static unsigned requestedRate=0x96A6,attachedTexture=0,combiner0=0x96D2,combiner1=0x96D2;
-static int tileWidth=0,tileHeight=0;
+static int tileWidth=0,tileHeight=0,attachmentCalls=0;
 static std::vector<unsigned> rates;
 const GLubyte *testString(GLenum name){
  if(name!=GL_EXTENSIONS)return glGetString(name);
@@ -45,7 +46,7 @@ void testRate(unsigned rate){requestedRate=rate;rates.push_back(rate);++rateCall
 void testCombine(unsigned a,unsigned b){combiner0=a;combiner1=b;}
 void testAttach(unsigned target,unsigned attachment,unsigned texture,int layer,int layers,int tw,int th){
  assert(target==GL_DRAW_FRAMEBUFFER&&attachment==0x96D1&&layer==0&&layers==1);
- attachedTexture=texture;tileWidth=tw;tileHeight=th;
+ ++attachmentCalls;attachedTexture=texture;tileWidth=tw;tileHeight=th;
 }
 void testQuery(int samples,int maximum,int *count,unsigned *out){
  querySamples=samples;unsigned values[]={0x96A6,0x96A7,0x96A9,0x96AC};*count=coarse4?4:3;
@@ -87,13 +88,17 @@ extern "C" const char *validate_foveation(){
   glGenTextures(1,&depth);glBindTexture(GL_TEXTURE_2D,depth);glTexStorage2D(GL_TEXTURE_2D,1,GL_DEPTH24_STENCIL8,1024,1024);
   glFramebufferTexture2D(GL_FRAMEBUFFER,GL_DEPTH_STENCIL_ATTACHMENT,GL_TEXTURE_2D,depth,0);
   require(glCheckFramebufferStatus(GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE,"real test framebuffer incomplete");
+  FrameBuffer target;target.fbo=fb;target.width=target.height=1024;target.generation=1;
+  FrameBufferManager manager;frameBuffers=&manager;manager.currentRenderFbo=&target;
   GL_SelectTexture(3);glBindTexture(GL_TEXTURE_2D,color);glEnable(GL_SCISSOR_TEST);glScissor(3,5,43,57);
   glViewport(7,9,123,141);glDepthFunc(GL_EQUAL);glStencilFunc(GL_EQUAL,128,255);glPixelStorei(GL_UNPACK_ALIGNMENT,8);
   GLuint unpack=0;glGenBuffers(1,&unpack);glBindBuffer(GL_PIXEL_UNPACK_BUFFER,unpack);glBufferData(GL_PIXEL_UNPACK_BUFFER,128,nullptr,GL_STATIC_DRAW);
   glPixelStorei(GL_UNPACK_ROW_LENGTH,37);glPixelStorei(GL_UNPACK_SKIP_PIXELS,2);glPixelStorei(GL_UNPACK_SKIP_ROWS,3);
   for(int selected:{0,1,2,3,4}){
-   mode=selected;MobileFoveation foveation;vr_foveation.value=2;rates.clear();rateCalls=0;
-   foveation.BeginFrame();foveation.BeginLighting(area,projection,right,0,true);
+   mode=selected;attachedTexture=0;attachmentCalls=0;MobileFoveation foveation;vr_foveation.value=2;rates.clear();rateCalls=0;
+   foveation.BeginFrame();foveation.PrepareTarget(area,projection,right,0,true,&target);
+   const int preparedCalls=attachmentCalls;
+   foveation.BeginLighting(area,projection,right,0,true);require(attachmentCalls==preparedCalls,"lighting entry changed framebuffer attachments after depth");
    if(mode==1){
     require(foveation.UsesDrawRates(),"QCOM fallback unavailable");
     foveation.Draw(edge);require(requestedRate==0x96A9,"peripheral draw not 2x2");
@@ -111,10 +116,10 @@ extern "C" const char *validate_foveation(){
     require(pixels[32*64+32]==0&&pixels[0]==5,"map encoding or centre/edge density wrong");
     glBindFramebuffer(GL_READ_FRAMEBUFFER,fb);glDeleteFramebuffers(1,&read);
    }else {foveation.Draw(edge);require(rateCalls==0&&!foveation.UsesDrawRates(),"unsupported extension was called");}
-   foveation.EndLighting();require(requestedRate==0x96A6&&!attachedTexture,"rate/map leaked outside lighting");
+   foveation.EndLighting();require(requestedRate==0x96A6&&attachmentCalls==preparedCalls,"lighting exit changed attachments or leaked rate");
    char status[256];foveation.GetDiagnostics(status,sizeof(status));
    if(mode==1)require(strstr(status,"coarse draws 3/4 (75.0%)")&&strstr(status,"2x2 request -> 2x2"),"draw fraction/probe status incorrect");
-   if(mode==2)require(strstr(status,"spatial map passes 1")&&!strstr(status,"coarse draws"),"spatial map mislabeled as zero draw coverage");
+   if(mode==2)require(strstr(status,"spatial passes 1")&&!strstr(status,"coarse draws"),"spatial map mislabeled as zero draw coverage");
    if(mode==2)require(combiner1==0x96D2,"attachment combiner leaked");
    GLint value;glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&value);require(value==GLint(fb),"VRS changed draw target");
    glGetIntegerv(GL_DEPTH_FUNC,&value);require(value==GL_EQUAL,"VRS changed depth comparison");
@@ -131,16 +136,32 @@ extern "C" const char *validate_foveation(){
     foveation.BeginLighting(area,projection,right,0,main);foveation.Draw(edge);foveation.EndLighting();
     require(rateCalls==before,"off/sky/mirror/lightgem touched shading rate");
    }
-   foveation.Shutdown();
+   if(mode==2){
+    require(attachmentCalls==1,"first target preparation did not attach once");
+    vr_foveation.value=2;
+    for(int frame=0;frame<8;++frame){foveation.BeginFrame();foveation.PrepareTarget(area,projection,right,0,true,&target);
+     foveation.BeginLighting(area,projection,right,0,true);foveation.EndLighting();}
+    require(attachmentCalls==1,"unchanged frames repeatedly attached/detached the map");
+    ++target.generation;foveation.PrepareTarget(area,projection,right,0,true,&target);
+    require(attachmentCalls==2,"recreated target did not receive its map");
+    const Rect resized={0,0,512,512};
+    foveation.PrepareTarget(resized,projection,right,0,true,&target);
+    require(attachmentCalls==3,"resized map was not reattached");
+    foveation.PrepareTarget(resized,projection,right,0,true,&target);
+    require(attachmentCalls==3,"stable resized map was reattached");
+    foveation.PrepareTarget(area,projection,right,0,true,&target);
+    require(attachmentCalls==4,"restored map size was not reattached");
+   }
+   foveation.Shutdown();attachedTexture=0;
   }
   mode=2;failMap=true;vr_foveation.value=3;MobileFoveation foveation;
-  foveation.BeginLighting(area,projection,right,0,true);require(!attachedTexture&&!foveation.UsesDrawRates(),"rejected map was retained");
+  foveation.PrepareTarget(area,projection,right,0,true,&target);foveation.BeginLighting(area,projection,right,0,true);require(!attachedTexture&&!foveation.UsesDrawRates(),"rejected map was retained");
   foveation.Draw(edge);foveation.EndLighting();failMap=false;foveation.Shutdown();
   // Context restart must query extensions again, not retain stale function/state.
-  mode=1;foveation.BeginLighting(area,projection,right,0,true);foveation.Draw(edge);
+  mode=1;foveation.PrepareTarget(area,projection,right,0,true,&target);foveation.BeginLighting(area,projection,right,0,true);foveation.Draw(edge);
   require(requestedRate==0x96AC,"restart/high outer-periphery rate failed");foveation.Shutdown();
   glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);glDeleteBuffers(1,&unpack);
-  glDeleteFramebuffers(1,&fb);glDeleteTextures(1,&color);glDeleteTextures(1,&depth);
+  glDeleteFramebuffers(1,&fb);target.fbo=0;glDeleteTextures(1,&color);glDeleteTextures(1,&depth);
   require(glGetError()==GL_NO_ERROR,"GLES error in production VRS controller");
   return nullptr;
  }catch(const std::exception &e){error=e.what();return error.c_str();}
@@ -161,6 +182,7 @@ class FoveationTests(unittest.TestCase):
                 aliases='\n'.join(f'#define qgl{name} gl{name}' for name in sorted(names))
                 aliases+='\n#define qglGetString testString\n#define qglGetIntegerv testInteger\n#define qglCheckFramebufferStatus testStatus\n'
                 for name,text in {'precompiled.h':'','renderer/tr_local.h':MOCKS.replace('GL_ALIASES',aliases).replace('CVAR_RENDERER=1,','CVAR_INTEGER=8,CVAR_RENDERER=1,'),
+                                  'renderer/backend/FrameBuffer.h':FBO,'renderer/backend/FrameBufferManager.h':MANAGER,
                                   'EGL/egl.h':'extern "C" void *eglGetProcAddress(const char *);\n'}.items():
                     dest=base/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_text(text)
                 cpp=base/'foveation.cpp';cpp.write_text(HARNESS)

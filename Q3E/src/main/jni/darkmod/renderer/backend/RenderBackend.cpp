@@ -90,6 +90,7 @@ void RenderBackend::Shutdown() {
 
 void RenderBackend::DrawMultiviewDepth( const viewDef_t *view, bool colorIsBackground, const MobileStereoView &stereo ) {
 	backEnd.viewDef=view;backEnd.depthFunc=GLS_DEPTHFUNC_EQUAL;
+	mobileLightingStage.PrepareTarget(view,&stereo);
 	RB_BeginDrawingView(colorIsBackground);
 	backEnd.lightScale=r_lightScale.GetFloat();backEnd.overBright=1.0f;
 	QuestCpuScope timing(questRenderCounters.depthCpuMs,vr_rendererDiagnostics.GetBool());
@@ -120,7 +121,10 @@ void RenderBackend::DrawView( const viewDef_t *viewDef, bool colorIsBackground, 
 	backEnd.depthFunc = GLS_DEPTHFUNC_EQUAL;
 
 	// clear the framebuffer, set the projection matrix, etc
-	if(!sceneAlreadyDrawn) RB_BeginDrawingView( colorIsBackground );
+	if(!sceneAlreadyDrawn) {
+		if(mobileLightingStage.HasView(viewDef))mobileLightingStage.PrepareTarget(viewDef);
+		RB_BeginDrawingView( colorIsBackground );
+	}
 	else {
 		// Continue the eye's material/effect passes against its existing layer.
 		GL_SetProjection((float *)viewDef->projectionMatrix);FB_ApplyViewport();
@@ -385,5 +389,7 @@ void RenderBackend::Tonemap() {
 }
 
 bool RenderBackend::TonemapSceneLayer(GLuint texture,int eye) {
-	return tonemapStage.ApplyTonemapArray(frameBuffers->defaultFbo,texture,eye);
+	const bool drawn=tonemapStage.ApplyTonemapArray(frameBuffers->defaultFbo,texture,eye);
+	if(drawn)++questRenderCounters.directTonemaps;
+	return drawn;
 }

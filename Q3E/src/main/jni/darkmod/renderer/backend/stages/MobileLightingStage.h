@@ -8,6 +8,7 @@
 // Quest's forward renderer. The combined-view frontend is retained; all
 // eye-independent work is prepared before the OpenXR eye command replays.
 bool R_UseMobileLighting();
+bool R_QuestFramebufferOptimizations();
 bool R_QuestFogDisabled( const viewDef_t *view );
 bool R_QuestSkipFogSurface( const viewDef_t *view, const srfTriangles_t *tri, const idMaterial *material );
 bool R_QuestSkipFogVolume( const viewDef_t *view, const idMaterial *material );
@@ -28,6 +29,7 @@ public:
 	bool CanDrawMultiview( const viewDef_t *view, const class MobileMultiviewTargets &targets ) const;
 	bool HasFrame() const;
 	bool PrepareMultiview();
+	void PrepareTarget(const viewDef_t *view,const struct MobileStereoView *stereo=nullptr);
 	void GetDiagnosticsText( char *buffer, int size ) const; // render thread only
 	void GetFoveationDiagnostics(char *buffer,int size) const;
 	void Draw( const viewDef_t *view, const struct MobileStereoView *stereo = nullptr );

@@ -61,6 +61,7 @@ public:
 };
 struct Images{idImageScratch *currentRenderImage,*currentDepthImage,*guiRenderImage;}*globalImages;
 struct{int vidWidth=16,vidHeight=16;}glConfig;
+struct{int depthDiscards=0;}questRenderCounters;
 enum{RC_NOP,RC_COPY_RENDER};
 struct emptyCommand_t{int commandId=RC_NOP;emptyCommand_t *next=nullptr;};
 struct copyRenderCommand_t:emptyCommand_t{idImageScratch *image=nullptr;};
@@ -73,11 +74,12 @@ class FrameBuffer{
 public:
  using Generator=std::function<void(FrameBuffer *)>;
  using MultiviewAttachment=void(*)(GLenum,GLenum,GLuint,GLint,GLint,GLsizei);
- GLuint fbo=0;int width=0,height=0;Generator generator;
+ GLuint fbo=0;uint64_t generation=0;int width=0,height=0;Generator generator;
+ uint64_t Generation()const{return generation;}
  explicit FrameBuffer(Generator generator={}):generator(generator){}
  ~FrameBuffer(){Destroy();}
  void Destroy(){if(fbo)glDeleteFramebuffers(1,&fbo);fbo=0;}
- void Init(int w,int h,int=0){width=w;height=h;glGenFramebuffers(1,&fbo);Bind();}
+ void Init(int w,int h,int=0){++generation;width=w;height=h;glGenFramebuffers(1,&fbo);Bind();}
  void Bind(){if(!fbo&&generator){generator(this);if(glCheckFramebufferStatus(GL_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE)throw std::runtime_error("incomplete real framebuffer");}glBindFramebuffer(GL_FRAMEBUFFER,fbo);}
  void BindDraw(){if(!fbo&&generator)Bind();glBindFramebuffer(GL_DRAW_FRAMEBUFFER,fbo);}
  void InvalidateDepthStencil();

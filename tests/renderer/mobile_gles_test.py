@@ -168,11 +168,13 @@ class MobileShaderTests(unittest.TestCase):
         for name in ('modelMatrix','modelViewMatrix'): g.uniform(p,'u_'+name,IDENTITY,'m')
         g.uniform(p,'u_projectionMatrix',PROJECTION,'m');g.uniform(p,'u_viewOrigin',[eye,0.,0.])
         g.uniform(p,'u_ambientParams',[0.,1.]);g.uniform(p,'u_clipPlane',[0.,0.,0.,0.])
+        g.uniform(p,'u_ssaoViewport',[0.,0.,1.,1.])
         g.uniform(p,'u_lightCount',light_count,'i');g.uniform(p,'u_flags',0x24,'i');g.uniform(p,'u_vertexColorMode',0,'i')
         g.uniform(p,'u_shadowFilter',1,'i')
         for name in ('bumpMatrix','diffuseMatrix','specularMatrix'):
             g.uniform(p,'u_'+name+'[0]',[1.,0.,0.,0.]);g.uniform(p,'u_'+name+'[1]',[0.,1.,0.,0.])
         for i in range(8):
+            g.uniform(p,f'u_lightColorScale[{i}]',1.)
             g.uniform(p,f'u_lightTextureSet[{i}]',i%2,'i')
             g.uniform(p,f'u_lightFlags[{i}]',0x100000 if ambient else 0,'i')
             g.uniform(p,f'u_lightOrigin[{i}]',[2.,0.,0.]);g.uniform(p,f'u_shadowParams[{i}]',[0.,0.,0.,0.])

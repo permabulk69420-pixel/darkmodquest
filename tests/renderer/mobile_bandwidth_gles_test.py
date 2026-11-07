@@ -9,6 +9,36 @@ import mobile_gles_test as fixtures
 
 
 class BandwidthShaderTests(unittest.TestCase):
+    def test_vrs_compatible_ssao_coordinates_match_pixel_coordinates(self):
+        g=GLES()
+        try:
+            vertex=source('stages/mobile/forward.vert.glsl')
+            fragment=source('stages/mobile/forward_1.frag.glsl')
+            code=re.sub(r'/\*.*?\*/|//[^\n]*','',fragment,flags=re.S)
+            self.assertNotRegex(code,r'\bgl_FragCoord\b','lighting still contains the EXT full-rate condition')
+            expression='(questScreen.xy / questScreen.z * 0.5 + 0.5) * u_ssaoViewport.zw + u_ssaoViewport.xy'
+            self.assertIn(expression,fragment)
+            reference=fragment.replace(expression,'gl_FragCoord.xy / u_renderResolution')
+            shaders=[g.program(vertex,text) for text in (fragment,reference)]
+            fixture=fixtures.MobileShaderTests();fixture.gl=g;images=[]
+            for program in shaders:
+                fixture.forward=program;fixture.setup_forward(ambient=True,draw=False)
+                g.call('glViewport',2,3,11,9);g.call('glClearColor',0.,0.,0.,1.);g.call('glClear',0x4000)
+                g.uniform(program,'u_renderResolution',[16.,16.]);g.uniform(program,'u_ssaoViewport',[2/16,3/16,11/16,9/16])
+                g.uniform(program,'u_lightFlags[0]',0x100000|0x800,'i')
+                # Perspective-varying W and an offset viewport exercise the
+                # reconstruction rather than a constant-W/fullscreen shortcut.
+                points=[(-8.,-8.,-3.),(8.,-8.,-7.),(8.,8.,-7.),(-8.,-8.,-3.),(8.,8.,-7.),(-8.,8.,-3.)]
+                vertices=(C.c_float*30)(*[v for point in points for v in (*point,.5,.5)])
+                g.fn('glBufferSubData',None,C.c_uint,C.c_ssize_t,C.c_ssize_t,C.c_void_p)(0x8892,0,C.sizeof(vertices),vertices)
+                g.texture(15)
+                pixels=(C.c_ubyte*1024)(*[v for y in range(16) for x in range(16) for v in ((x*9+y*7)%256,0,0,255)])
+                g.call('glTexImage2D',0x0DE1,0,0x8058,16,16,0,0x1908,0x1401,pixels)
+                g.call('glDrawArrays',0x0004,0,6);images.append(g.pixels(16,16))
+            self.assertLessEqual(max(abs(a-b) for a,b in zip(*images)),1)
+            print('PASS: lighting has no static gl_FragCoord reference; SSAO matches pixel coordinates with perspective and viewport offset')
+        finally:g.close()
+
     def test_direct_array_tonemap_matches_scene_copy_for_both_eyes(self):
         g=GLES()
         try:
@@ -83,17 +113,23 @@ highp vec3 questRound16(highp vec3 x){return vec3(unpackHalf2x16(packHalf2x16(x.
             rounded=g.program(vertex,rounded_source)
             fixture=fixtures.MobileShaderTests();fixture.gl=g
             randomizer=random.Random(72);worst=0
-            cases=[(0.,0.,.0),(6.,-.5,.8),(-8.,.1,-.8)]
-            cases.extend((randomizer.uniform(-12,12),randomizer.uniform(-8,8),randomizer.uniform(-2,2)) for _ in range(36))
-            for x,y,eye in cases:
+            cases=[(0.,0.,.0,1.),(6.,-.5,.8,1.),(-8.,.1,-.8,1.)]
+            cases.extend((randomizer.uniform(-12,12),randomizer.uniform(-8,8),randomizer.uniform(-2,2),1.) for _ in range(36))
+            cases.extend((x,y,eye,scale) for x,y,eye,scale in ((0.,0.,0.,8.),(3.,-.5,.8,64.),(-4.,1.,-.4,256.)))
+            for x,y,eye,brightness in cases:
                 normal=(randomizer.randrange(32,224),randomizer.randrange(32,224),randomizer.randrange(128,256),255)
                 images=[]
                 for program in (legacy,full,mixed,rounded):
                     fixture.forward=program;fixture.setup_forward(ambient=False,eye=eye,draw=False)
                     g.texture(0,normal)
                     g.uniform(program,'u_lightOrigin[0]',[x,y,-.5])
-                    g.uniform(program,'u_diffuseColor[0]',[.17,.09,.035,1.])
-                    g.uniform(program,'u_specularColor[0]',[.35,.27,.15,1.])
+                    diffuse=[v*brightness for v in (.17,.09,.035)]
+                    specular=[v*brightness for v in (.35,.27,.15)]
+                    scale=max(1.,*map(abs,diffuse+specular)) if program in (mixed,rounded) else 1.
+                    g.uniform(program,'u_diffuseColor[0]',[v/scale for v in diffuse]+[1.])
+                    g.uniform(program,'u_specularColor[0]',[v/scale for v in specular]+[1.])
+                    g.uniform(program,'u_lightColorScale[0]',scale)
+                    if brightness>1.:g.texture(4,(8,8,8,255))
                     # Also exercise the bounded normal/direction computations
                     # at grazing incidence and the bump-light toggling fix.
                     g.uniform(program,'u_flags',0x24|0x020000,'i')

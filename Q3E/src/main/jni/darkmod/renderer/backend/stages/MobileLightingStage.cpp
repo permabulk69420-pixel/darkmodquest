@@ -26,6 +26,11 @@ namespace {
 idCVar vr_rendererDiagnostics( "vr_rendererDiagnostics", "0", CVAR_RENDERER | CVAR_BOOL,
 	"Show live renderer settings and measured stereo rendering activity on the VR HUD; set in the launcher" );
 QuestRenderCounters questRenderCounters;
+idCVar r_questFramebufferOptimizations("r_questFramebufferOptimizations","1",CVAR_RENDERER|CVAR_BOOL,
+	"Defer scene depth copies, directly tonemap scene layers and discard finished eye depth; set in launcher");
+idCVar r_questMixedPrecision("r_questMixedPrecision","1",CVAR_RENDERER|CVAR_BOOL|CVAR_INIT,
+	"Use mixed precision for bounded scene lighting weights; 0 selects original full-precision BRDF. Set in launcher");
+bool R_QuestFramebufferOptimizations(){return r_questFramebufferOptimizations.GetBool();}
 
 idCVar r_questRenderer( "r_questRenderer", "1", CVAR_RENDERER | CVAR_BOOL | CVAR_INIT,
 	"Quest forward renderer: cached stereo shadows and up to eight lights per surface draw. Set at launch; 0 uses the legacy renderer." );
@@ -98,6 +103,7 @@ struct LightingUniforms : GLSLUniformGroup {
 	DEFINE_MOBILE_UNIFORM( vec3, viewOrigin )
 	DEFINE_MOBILE_UNIFORM( vec4, clipPlane )
 	DEFINE_MOBILE_UNIFORM( vec2, renderResolution )
+	DEFINE_MOBILE_UNIFORM( vec4, ssaoViewport )
 	DEFINE_MOBILE_UNIFORM( vec2, ambientParams )
 	DEFINE_MOBILE_UNIFORM( int, lightCount )
 	DEFINE_MOBILE_UNIFORM( int, shadowFilter )
@@ -116,6 +122,7 @@ struct LightingUniforms : GLSLUniformGroup {
 	DEFINE_MOBILE_UNIFORM( vec3, lightOrigin )
 	DEFINE_MOBILE_UNIFORM( vec4, diffuseColor )
 	DEFINE_MOBILE_UNIFORM( vec4, specularColor )
+	DEFINE_MOBILE_UNIFORM( float, lightColorScale )
 	DEFINE_MOBILE_UNIFORM( mat4, lightProjection )
 	DEFINE_MOBILE_UNIFORM( vec4, lightTextureMatrix )
 	DEFINE_MOBILE_UNIFORM( vec4, shadowPage )
@@ -280,7 +287,7 @@ void MobileLightingStage::Init() {
 		const idStr fragment=count==8 ? "stages/mobile/forward.frag.glsl" : va("stages/mobile/forward_%d.frag.glsl",count);
 		impl->lighting[i]=programManager->LoadFromGenerator(va("quest_%sforward_%d",i>=8?"lightgem_":i>=4?"multiview_":"",count),[fragment,i](GLSLProgram *program){
 			idHashMapDict defines;if(i>=4&&i<8)defines["QUEST_MULTIVIEW"]="1";
-			if(i>=8)defines["QUEST_FULL_PRECISION_LIGHTING"]="1";
+			if(i>=8||!r_questMixedPrecision.GetBool())defines["QUEST_FULL_PRECISION_LIGHTING"]="1";
 			program->LoadFromFiles("stages/mobile/forward.vert.glsl",fragment,defines);
 		});
 	}
@@ -298,6 +305,12 @@ void MobileLightingStage::Shutdown() {
 }
 void MobileLightingStage::GetFoveationDiagnostics(char *buffer,int size) const {
 	impl->foveation.GetDiagnostics(buffer,size);
+}
+void MobileLightingStage::PrepareTarget(const viewDef_t *view,const MobileStereoView *stereo) {
+	impl->foveation.PrepareTarget(RB_QuestViewViewport(view),stereo?stereo->projection[0]:view->projectionMatrix,
+		stereo?stereo->projection[1]:nullptr,r_multiSamples.GetInteger(),
+		!view->isSubview&&!view->isPortalSky&&!view->IsLightGem()&&view->renderView.viewID==VID_PLAYER_VIEW,
+		frameBuffers->currentRenderFbo);
 }
 void MobileLightingStage::EndFrame() {
 	if ( !impl->views.empty() && impl->eyeDraws > 0 && ++impl->frames % 120 == 0 && r_questShowRenderStats.GetBool() ) {
@@ -797,6 +810,7 @@ void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, ViewPlan &plan
 	Bind(0, inter.bumpImage); Bind(1, inter.diffuseImage); Bind(2, inter.specularImage);
 	Bind(3, inter.parallaxImage ? inter.parallaxImage : globalImages->blackImage);
 	idVec3 origins[MAX_BATCH_LIGHTS];
+	float colorScale[MAX_BATCH_LIGHTS];
 	idVec4 diffuse[MAX_BATCH_LIGHTS], specular[MAX_BATCH_LIGHTS], pages[MAX_BATCH_LIGHTS], params[MAX_BATCH_LIGHTS], tex[2*MAX_BATCH_LIGHTS];
 	float projections[16*MAX_BATCH_LIGHTS] = {}, shadowProjections[16*MAX_BATCH_LIGHTS] = {};
 	int lightFlags[MAX_BATCH_LIGHTS] = {}, textureSets[MAX_BATCH_LIGHTS] = {};
@@ -805,6 +819,11 @@ void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, ViewPlan &plan
 	for ( int i = 0; i < count; ++i ) {
 		const Packet &p = *visible[i]; const auto &d = p.inter; const auto *l = p.light;
 		origins[i] = l->globalLightOrigin; diffuse[i] = d.diffuseColor; specular[i] = d.specularColor;
+		colorScale[i]=1.0f;
+		if(r_questMixedPrecision.GetBool()&&!view->IsLightGem()&&!l->lightShader->IsAmbientLight()){
+			for(int c=0;c<3;++c)colorScale[i]=std::max(colorScale[i],std::max(idMath::Fabs(diffuse[i][c]),idMath::Fabs(specular[i][c])));
+			if(colorScale[i]>1.0f)for(int c=0;c<3;++c){diffuse[i][c]/=colorScale[i];specular[i][c]/=colorScale[i];}
+		}
 		memcpy(projections + i*16, d.lightProjection, 16*sizeof(float));
 		tex[2*i] = d.lightTextureMatrix[0]; tex[2*i+1] = d.lightTextureMatrix[1];
 		lightFlags[i] = l->lightShader->IsCubicLight() ? SFL_LIGHT_CUBIC : 0;
@@ -848,6 +867,7 @@ void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, ViewPlan &plan
 	u->lightOrigin.SetArray(count, origins[0].ToFloatPtr());
 	u->diffuseColor.SetArray(count, diffuse[0].ToFloatPtr());
 	u->specularColor.SetArray(count, specular[0].ToFloatPtr());
+	u->lightColorScale.SetArray(count,colorScale);
 	u->lightProjection.SetArray(count, projections);
 	u->lightTextureMatrix.SetArray(2*count, tex[0].ToFloatPtr());
 	u->shadowPage.SetArray(count, pages[0].ToFloatPtr());
@@ -896,6 +916,9 @@ LightingUniforms *MobileLightingStage::Impl::UseLighting(const viewDef_t *view,i
 	}
 	u->clipPlane.Set(view->numClipPlanes ? view->clipPlane[0] : idPlane(0,0,0,0));
 	u->renderResolution.Set(frameBuffers->activeFbo->Width(), frameBuffers->activeFbo->Height());
+	const auto viewport=RB_QuestViewViewport(view);
+	const float rw=frameBuffers->activeFbo->Width(),rh=frameBuffers->activeFbo->Height();
+	u->ssaoViewport.Set(viewport.x1/rw,viewport.y1/rh,(viewport.x2-viewport.x1)/rw,(viewport.y2-viewport.y1)/rh);
 	u->ambientParams.Set(r_ambientMinLevel.GetFloat(), view->IsLightGem() ? 1.0f : r_ambientGamma.GetFloat());
 	// Lightgem is a gameplay measurement and historically uses hard shadows.
 	u->shadowFilter.Set(!view->IsLightGem() && r_softShadowsQuality.GetBool());

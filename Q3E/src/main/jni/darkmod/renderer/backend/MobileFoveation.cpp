@@ -3,6 +3,8 @@
 #include "renderer/tr_local.h"
 #include "renderer/backend/MobileFoveation.h"
 #include "renderer/backend/MobileVrsProbe.h"
+#include "renderer/backend/FrameBuffer.h"
+#include "renderer/backend/FrameBufferManager.h"
 #ifdef TDM_VR_OPENXR
 #include <EGL/egl.h>
 #endif
@@ -57,14 +59,14 @@ void MobileFoveation::Init() {
 }
 
 void MobileFoveation::BeginFrame() {
-	EndLighting();reducedDraws=fullDraws=mappedPasses=0;
+	EndLighting();reducedDraws=fullDraws=mappedPasses=attachmentUpdates=0;
 }
 
 void MobileFoveation::SetRate(unsigned value) {
 	if(currentRate!=value){rate(value);currentRate=value;}
 }
 
-bool MobileFoveation::BindMap(int samples) {
+bool MobileFoveation::PrepareMap(int samples,FrameBuffer *target) {
 	if(qcom||mapFailed||tileSize<=0)return false;
 	const bool changed=!mapTexture||cachedLevel!=level||cachedSamples!=samples||
 		memcmp(centres,cachedCentres,sizeof(centres))||
@@ -88,7 +90,9 @@ bool MobileFoveation::BindMap(int samples) {
 		GLint bound=0,unpack[5]={};qglGetIntegerv(GL_TEXTURE_BINDING_2D,&bound);
 		const unsigned parameters[]={GL_UNPACK_ALIGNMENT,GL_UNPACK_ROW_LENGTH,GL_UNPACK_SKIP_PIXELS,GL_UNPACK_SKIP_ROWS,GL_PIXEL_UNPACK_BUFFER_BINDING};
 		for(int i=0;i<5;++i)qglGetIntegerv(parameters[i],&unpack[i]);
-		if(mapTexture&&(w!=mapWidth||h!=mapHeight)){qglDeleteTextures(1,&mapTexture);mapTexture=0;}
+		if(mapTexture&&(w!=mapWidth||h!=mapHeight)){
+			qglDeleteTextures(1,&mapTexture);mapTexture=0;preparedTargets.clear();
+		}
 		if(!mapTexture){qglGenTextures(1,&mapTexture);qglBindTexture(GL_TEXTURE_2D,mapTexture);
 			qglTexStorage2D(GL_TEXTURE_2D,1,GL_R8UI,w,h);
 			qglTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);qglTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
@@ -102,23 +106,38 @@ bool MobileFoveation::BindMap(int samples) {
 		mapWidth=w;mapHeight=h;cachedLevel=level;cachedSamples=samples;
 		cachedViewport=viewport;memcpy(cachedCentres,centres,sizeof(centres));
 	}
-	attachment(GL_DRAW_FRAMEBUFFER,ATTACHMENT,mapTexture,0,1,tileSize,tileSize);
-	if(qglCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE) {
-		attachment(GL_DRAW_FRAMEBUFFER,ATTACHMENT,0,0,1,tileSize,tileSize);mapFailed=true;
-		common->Warning("Quest shading-rate map rejected; retaining full-rate lighting");return false;
+	auto &state=preparedTargets[target];
+	if(state.generation!=target->Generation()||state.texture!=mapTexture){
+		attachment(GL_DRAW_FRAMEBUFFER,ATTACHMENT,mapTexture,0,1,tileSize,tileSize);
+		++attachmentUpdates;
+		if(qglCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE) {
+			attachment(GL_DRAW_FRAMEBUFFER,ATTACHMENT,0,0,1,tileSize,tileSize);mapFailed=true;
+			common->Warning("Quest shading-rate map rejected; retaining full-rate lighting");return false;
+		}
+		state.generation=target->Generation();state.texture=mapTexture;
 	}
-	combine(KEEP,REPLACE);++mappedPasses;return true;
+	return true;
 }
 
-void MobileFoveation::BeginLighting(const MobileRenderPlan::Rect &area,const float *left,
-	const float *right,int samples,bool mainView) {
+void MobileFoveation::PrepareTarget(const MobileRenderPlan::Rect &area,const float *left,
+	const float *right,int samples,bool mainView,FrameBuffer *target) {
 	EndLighting();level=std::max(0,std::min(3,vr_foveation.GetInteger()));
+	prepared=false;preparedTarget=target;
 	if(!level||!mainView||area.Empty())return;
 	Init();if(!rate)return;
 	viewport=area;
 	for(int eye=0;eye<2;++eye){const float *p=eye&&right?right:left;
 		centres[eye][0]=-p[8];centres[eye][1]=-p[9];}
-	drawing=true;mapped=BindMap(samples);
+	if(!qcom){combine(KEEP,KEEP);target->Bind();prepared=PrepareMap(samples,target);}
+	else prepared=true;
+}
+
+void MobileFoveation::BeginLighting(const MobileRenderPlan::Rect &area,const float *left,
+	const float *right,int samples,bool mainView) {
+	EndLighting();
+	if(!mainView||vr_foveation.GetInteger()<=0||!prepared||preparedTarget!=frameBuffers->currentRenderFbo)return;
+	drawing=true;mapped=!qcom;
+	if(mapped){combine(KEEP,REPLACE);++mappedPasses;}
 	// EXT without a usable spatial map cannot provide conservative draw-rate
 	// fallback unless the matching shader extension is active. Keep it full rate.
 	if(!qcom&&!mapped)drawing=false;
@@ -134,7 +153,7 @@ void MobileFoveation::Draw(const MobileRenderPlan::Rect &bounds) {
 
 void MobileFoveation::EndLighting() {
 	if(!drawing)return;
-	if(mapped){combine(KEEP,KEEP);attachment(GL_DRAW_FRAMEBUFFER,ATTACHMENT,0,0,1,tileSize,tileSize);}
+	if(mapped)combine(KEEP,KEEP);
 	SetRate(RATE_1X1);drawing=mapped=false;
 }
 
@@ -150,8 +169,8 @@ void MobileFoveation::GetDiagnostics(char *buffer,int size) const {
 	char gpu[64];
 	if(gpuWidth&&gpuHeight)snprintf(gpu,sizeof(gpu),"2x2 request -> %dx%d",gpuWidth,gpuHeight);
 	else snprintf(gpu,sizeof(gpu),"unverified");
-	if(mappedPasses)snprintf(buffer,size,"Foveation: %s (level %d) | spatial map passes %d\n"
-		"VRS GPU probe: %s\n",state,vr_foveation.GetInteger(),mappedPasses,gpu);
+	if(mappedPasses)snprintf(buffer,size,"Foveation: %s (level %d) | spatial passes %d | target updates %d\n"
+		"VRS GPU probe: %s\n",state,vr_foveation.GetInteger(),mappedPasses,attachmentUpdates,gpu);
 	else snprintf(buffer,size,"Foveation: %s (level %d) | coarse draws %d/%d (%.1f%%)\n"
 		"VRS GPU probe: %s\n",state,vr_foveation.GetInteger(),reducedDraws,total,total?100.0*reducedDraws/total:0.0,gpu);
 }

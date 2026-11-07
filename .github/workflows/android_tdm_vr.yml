@@ -6,8 +6,8 @@
 #     (so ordinary pushes do not spend CI minutes)
 #   - manual "Run workflow" (needs this file to exist on the default branch)
 #
-# Simple phone download: Releases -> Quest 3 - Foveation Verification.
-# APK filename: TDM-Quest3-Foveation-Verification.apk (also inside the Actions artifact).
+# Simple phone download: Releases -> Quest 3 - Rendering Fix and Controls.
+# APK filename: TDM-Quest3-Rendering-Fix-Controls.apk (also inside the Actions artifact).
 
 name: Android APK - TDM only (arm64)
 
@@ -52,6 +52,7 @@ jobs:
       run: |
         python3 bin/pack_tdm_shaders.py --check
         python3 tests/renderer/shader_install_test.py
+        python3 tests/renderer/vr_settings_test.py
         python3 tests/renderer/shader_preprocess_test.py
         python3 tests/renderer/multiview_program_test.py
         python3 tests/renderer/gles_loader_test.py
@@ -73,13 +74,13 @@ jobs:
     - name: Collect APK
       run: |
         mkdir -p out
-        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest3-Foveation-Verification.apk"
+        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest3-Rendering-Fix-Controls.apk"
         ls -la out
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Quest3-Foveation-Verification-APK
+        name: Quest3-Rendering-Fix-Controls-APK
         path: out/*.apk
         if-no-files-found: error
         retention-days: 30
@@ -89,12 +90,12 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        tag=quest-foveation-verification
-        apk=out/TDM-Quest3-Foveation-Verification.apk
-        notes="Quest 3 ARM64: includes the Bandwidth and Lighting Update plus a one-time GPU shading-rate probe and clearer foveation diagnostics. Enable Show renderer diagnostics overlay in launcher settings. The HUD shows the requested foveation level, coarse/total scene draw requests and the GPU result of a single-sample 2x2-rate startup test. A 1x1 result means the probe was rendered at full rate; unverified means the shader interface could not be measured. This does not measure per-fragment rates in the game or guarantee FPS gains. The conservative draw path retains full rate for any geometry crossing the protected centre; spatial-map drivers show map passes instead. No files are exported by the check. Eye resolution, tracking and controls are unchanged. Android ARM64 and production-controller/GLES state-restoration checks pass. Source commit: ${GITHUB_SHA} (branch ${GITHUB_REF_NAME})."
+        tag=quest-rendering-fix-controls
+        apk=out/TDM-Quest3-Rendering-Fix-Controls.apk
+        notes="Quest 3 ARM64 rendering fixes and comparison controls. Foveation now prepares and retains shading-rate attachments before scene depth instead of changing them between depth and lighting. Lighting and its shared parallax helper reconstruct screen coordinates to avoid a documented EXT VRS full-rate condition. Mixed precision now includes bounded RGB lighting weights, with brightness restored at full precision; positions, shadows, HDR samples, accumulation and the gameplay lightgem retain full precision. Launcher checkboxes independently enable optimized framebuffer copies and mixed-precision lighting; disabling either selects its original path. The existing renderer diagnostics overlay reports actual depth copies, direct tonemaps, depth discards and shading-rate target updates. Shader update 13 replaces the installed sources. Android ARM64 builds and production GLES pixel/controller checks pass. Quest FPS improvement has not been measured. Eye resolution, tracking and controls are unchanged. Source commit: ${GITHUB_SHA} (branch ${GITHUB_REF_NAME})."
         if gh release view "$tag" >/dev/null 2>&1; then
           gh release upload "$tag" "$apk" --clobber
-          gh release edit "$tag" --title "Quest 3 - Foveation Verification" --notes "$notes" --latest
+          gh release edit "$tag" --title "Quest 3 - Rendering Fix and Controls" --notes "$notes" --latest
         else
-          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 - Foveation Verification" --notes "$notes" --latest
+          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 - Rendering Fix and Controls" --notes "$notes" --latest
         fi

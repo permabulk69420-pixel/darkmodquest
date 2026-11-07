@@ -14,6 +14,7 @@ struct QuestRenderCounters {
 	int volumetricLights = 0;
 	int ssaoPasses = 0;
 	int softParticleDraws = 0;
+	int sceneDepthCopies = 0, directTonemaps = 0, depthDiscards = 0;
 	double prepareCpuMs = 0, depthCpuMs = 0, lightingCpuMs = 0;
 };
 extern QuestRenderCounters questRenderCounters;

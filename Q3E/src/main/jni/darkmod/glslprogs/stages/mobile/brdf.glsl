@@ -9,11 +9,12 @@
 // Only bounded unit vectors, Fresnel terms and colour weights use FP16.
 // Directions are normalized in highp before conversion. Keep the glossy
 // half-vector dot/power in highp to avoid stepping in narrow highlights.
-// Texture/light colours and their accumulation remain highp: HDR and signed
-// material stages are not bounded by FP16's exponent range.
+// Material texture colours and final accumulation remain highp. Direct-light
+// RGB parameters are normalized on the CPU; restore their scale outside here
+// so HDR and signed material stages retain their original exponent range.
 highp vec3 questAdvancedInteraction(InteractionGeometry props,
-    highp vec3 diffuseParam, highp vec4 diffuseTexel,
-    highp vec3 specularParam, highp vec4 specularTexel,
+    QUEST_UNIT vec3 diffuseParam, highp vec4 diffuseTexel,
+    QUEST_UNIT vec3 specularParam, highp vec4 specularTexel,
     highp vec3 vertexColor, bool togglingFix) {
     QUEST_UNIT vec3 lightDirection = props.localL;
     QUEST_UNIT vec3 viewDirection = props.localV;
@@ -34,9 +35,10 @@ highp vec3 questAdvancedInteraction(InteractionGeometry props,
     QUEST_UNIT float multiplier = adjusted + rim * R2f;
     // Vertex colour is bounded; leave material/HDR values outside the FP16
     // products. Cast weight vectors into the highp colour expression only here.
-    QUEST_UNIT vec3 diffuseWeight = multiplier * vertexColor;
-    QUEST_UNIT vec3 specularWeight = (specularCoeff * R2f * multiplier) * vertexColor;
-    return diffuseParam * diffuseTexel.rgb * vec3(diffuseWeight)
-         + specularParam * specularTexel.rgb * vec3(specularWeight);
+    QUEST_UNIT vec3 boundedVertexColor = vertexColor;
+    QUEST_UNIT vec3 diffuseWeight = diffuseParam * (multiplier * boundedVertexColor);
+    QUEST_UNIT vec3 specularWeight = specularParam * ((specularCoeff * R2f * multiplier) * boundedVertexColor);
+    return diffuseTexel.rgb * vec3(diffuseWeight)
+         + specularTexel.rgb * vec3(specularWeight);
 }
 #endif

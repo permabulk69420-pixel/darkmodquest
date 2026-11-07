@@ -37,6 +37,7 @@ struct frameData_t{const emptyCommand_t *cmdHead;};
 const emptyCommand_t *NextCommand(const emptyCommand_t *cmd){return cmd->next;}
 struct{viewDef_t *viewDef=nullptr;}backEnd;
 struct Cvar{bool v=false;bool GetBool()const{return v;}void SetBool(bool value){v=value;}};
+bool optimizeFramebuffers=true;bool R_QuestFramebufferOptimizations(){return optimizeFramebuffers;}
 Cvar r_tonemap{true},r_useScissor{true},r_useDepthBoundsTest{true},r_skipRender,r_skipRenderContext,vr_rendererDiagnostics;
 struct{double lightingCpuMs=0;}questRenderCounters;
 struct QuestCpuScope{QuestCpuScope(double &,bool){}};
@@ -141,6 +142,12 @@ int main(){
    std::vector<std::string>{"depth","light","copyDepth0","material0","discard0","copyDepth1","material1","discard1"};
   assert(events==expected&&renderer.directTonemaps==2&&tonemaps==0&&manager.colorCopies==0&&discards==2);
  }
+ // The launcher switch restores baseline copies/early captures, without AO.
+ ao.enabled=false;optimizeFramebuffers=false;events.clear();manager.colorCopies=0;renderer.directTonemaps=0;discards=0;
+ backend.ExecuteMultiview(&frame);
+ assert(renderer.directTonemaps==0&&manager.colorCopies==2&&discards==0);
+ assert(events==std::vector<std::string>({"depth","copyDepth0","copyDepth1","light","material0","material1"}));
+ optimizeFramebuffers=true;
  // A scaled target or stale/rejected array program retains the 2D copy path.
  for(int fallback:{0,1}){
   backend.multiview.sizeMatches=fallback!=0;renderer.arrayProgram=fallback!=1;

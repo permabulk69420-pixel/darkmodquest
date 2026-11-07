@@ -38,11 +38,13 @@ out vec2 texNormal, texDiffuse, texSpecular, texParallax, texCoord;
 out vec3 positionModel, positionWorld, viewLocal;
 out mat3 tangentToModel;
 out vec4 vertexColor;
+out highp vec3 questScreen;
 void main() {
 #ifdef QUEST_MULTIVIEW
     questEye = int(gl_ViewID_OVR);
 #endif
     gl_Position = objectPosToClip(attr_Position, QUEST_MODELVIEW, QUEST_PROJECTION);
+    questScreen = vec3(gl_Position.xy, gl_Position.w);
     texNormal = transformSurfaceTexCoords(attr_TexCoord.xy, true, u_bumpMatrix);
     texDiffuse = transformSurfaceTexCoords(attr_TexCoord.xy, true, u_diffuseMatrix);
     texSpecular = transformSurfaceTexCoords(attr_TexCoord.xy, true, u_specularMatrix);
