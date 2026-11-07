@@ -40,17 +40,9 @@ int main(){
     assert(a.Finish(Content(0))==b.Finish(Content(0))); // traversal order does not invalidate depth
     b.Add(stone);assert(a.Finish(Content(0))!=b.Finish(Content(0)));
     FaceState face;
-    assert(face.StaticDirty(stone)&&face.FinalDirty(doorClosed));
-    face.staticContent=stone;face.haveStatic=true;face.finalContent=doorClosed;face.haveFinal=true;
-    assert(!face.StaticDirty(stone)&&!face.FinalDirty(doorClosed));
-    assert(!face.StaticDirty(stone)&&face.FinalDirty(doorOpen)); // actor changes do not redraw the wall
-    assert(face.StaticDirty(alphaChanged));
-    face={};assert(face.StaticDirty(stone)&&face.FinalDirty(doorClosed)); // lost/repacked storage
-    MotionTracker motion;
-    assert(motion.Static(1,doorClosed,1));assert(motion.Static(1,doorClosed,2));
-    assert(!motion.Static(1,doorOpen,3));assert(!motion.Static(1,doorOpen,32));
-    assert(motion.Static(1,doorOpen,33));assert(!motion.Static(1,alphaChanged,34));
-    motion.Clear();assert(motion.Static(1,doorClosed,35));
+    assert(face.FinalDirty(stone));face.finalContent=stone;face.haveFinal=true;
+    assert(!face.FinalDirty(stone));assert(face.FinalDirty(doorOpen));
+    assert(face.FinalDirty(alphaChanged));face={};assert(face.FinalDirty(stone));
     AtlasLayout layout;
     CheckLayout(layout,2048,{{1,256,3,4},{2,128,3,2},{3,64,1,4}});
     const auto first=layout.slots;
@@ -66,5 +58,5 @@ int main(){
         std::shuffle(requests.begin(),requests.end(),rng);
         CheckLayout(layout,frame%50==0?1024:2048,requests);
     }
-    std::cout<<"PASS: static/dynamic shadow invalidation, movement/alpha changes, retirement, resize, persistent slots and 1,000 changing light sets\n";
+    std::cout<<"PASS: retained-face shadow invalidation, movement/alpha changes, retirement, resize, persistent slots and 1,000 changing light sets\n";
 }

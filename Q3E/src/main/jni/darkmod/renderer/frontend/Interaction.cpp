@@ -18,6 +18,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 
 #include "renderer/tr_local.h"
 #include "renderer/frontend/Interaction.h"
+#include "renderer/backend/stages/MobileLightingStage.h"
 
 /*
 ===========================================================================
@@ -39,8 +40,24 @@ idCVarInt r_singleShadowEntity( "r_singleShadowEntity", "-1", CVAR_RENDERER, "su
 
 void idInteraction::PrepareLightSurf( linkLocation_t link, const srfTriangles_t *tri, const viewEntity_s *space,
 		const idMaterial *material, const idScreenRect &scissor, bool viewInsideShadow, bool blockSelfShadows ) {
+	const srfTriangles_t *canonical=nullptr;
+	// Use the known source mesh, rather than trying to infer it later by vertex
+	// buffer identity. Distinct surfaces may share a vertex allocation. The
+	// mobile shader clips each light's volume after this exact source mapping.
+	if (R_UseMobileLighting() && link<=INTERACTION_GLOBAL && !lightDef->lightShader->IsFogLight() &&
+		!lightDef->lightShader->IsBlendLight() && tri->ambientSurface) {
+		const srfTriangles_t *source=tri->ambientSurface;
+		if(source->verts==tri->verts && source->numVerts==tri->numVerts && source->ambientCache==tri->ambientCache &&
+			source->indexCache.IsValid() && vertexCache.CacheIsCurrent(source->indexCache)) canonical=source;
+	}
 
 	drawSurf_t *drawSurf = R_PrepareLightSurf( tri, space, material, scissor, viewInsideShadow, blockSelfShadows );
+	if(canonical && (!(canonical->indexCache==tri->indexCache) || canonical->numIndexes!=tri->numIndexes)) {
+		// Keep the clipped mesh for a single-light draw. Use the exact original
+		// only when several lights can share one material/geometry submission.
+		auto *full=(drawSurf_t *)R_FrameAlloc(sizeof(drawSurf_t));
+		*full=*drawSurf;full->CopyGeo(canonical);drawSurf->mobileCanonical=full;
+	}
 	drawSurf->nextOnLight = surfsToLink[link];
 	surfsToLink[link] = drawSurf;
 }

@@ -37,9 +37,8 @@ inline bool IndexSignature( Signature &content, uint64_t revision, bool isStatic
 	return isStatic;
 }
 struct FaceState {
-	Signature staticContent, finalContent;
-	bool haveStatic = false, haveFinal = false;
-	bool StaticDirty( const Signature &s ) const { return !haveStatic || s != staticContent; }
+	Signature finalContent;
+	bool haveFinal = false;
 	bool FinalDirty( const Signature &s ) const { return !haveFinal || s != finalContent; }
 };
 
@@ -105,25 +104,4 @@ public:
 	void Clear() { slots.clear();atlasSize = 0; }
 };
 
-// A model which starts moving is kept out of the static layer until it settles.
-// This is only a cache placement choice: every changed signature is still
-// redrawn immediately, including door motion and animated alpha/texture state.
-class MotionTracker {
-	struct Entry { Signature content; uint64_t changed, used; bool settled; };
-	std::map<uint64_t, Entry> entries;
-public:
-	bool Static( uint64_t key, const Signature &content, uint64_t frame ) {
-		auto found = entries.find(key);
-		if ( found == entries.end() ) { entries.emplace(key,Entry{content,frame,frame,true}); return true; }
-		Entry &entry = found->second;entry.used = frame;
-		if ( entry.content != content ) { entry.content = content;entry.changed = frame;entry.settled = false; }
-		if ( frame >= entry.changed + 30 ) entry.settled = true;
-		return entry.settled;
-	}
-	void Prune( uint64_t frame ) {
-		for ( auto it = entries.begin(); it != entries.end(); )
-			if ( frame > it->second.used + 120 ) it = entries.erase(it); else ++it;
-	}
-	void Clear() { entries.clear(); }
-};
 }

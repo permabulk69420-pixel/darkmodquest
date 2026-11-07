@@ -226,6 +226,7 @@ public:
 	// May perform file loading if the image was not preloaded.
 	// May start a background image read.
 	void		Bind();
+	void BindToUnit(int textureUnit); // preserves usage tracking without redundant active-unit changes
 
 	// checks if the texture is currently bound to the specified texture unit
 	bool		IsBound( int textureUnit ) const;

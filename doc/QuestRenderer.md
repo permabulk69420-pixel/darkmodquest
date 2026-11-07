@@ -15,11 +15,11 @@ Before either eye replay, `MobileLightingStage` walks the recorded views once:
 2. Build surface batches containing up to eight light contributions. Lights
    share at most two projection/falloff/ambient texture tuples, retaining the
    sixteen-sampler GLES limit. Every light keeps independent matrices, color,
-   origin and shadow parameters. Use the
-   surface's original mesh when it can be identified unambiguously, and clip
-   light volumes in the shader; this avoids requiring identical per-light
-   triangle subsets. Fall back to the exact interaction mesh for ambiguous
-   shared vertex allocations. Translucent interaction order is retained;
+   origin and shadow parameters. The frontend records each interaction's exact
+   original mesh, including distinct surfaces that share a vertex allocation.
+   Fused draws use that mesh with shader light-volume clipping; single-light
+   draws retain their smaller per-light triangle subsets. Missing or stale source
+   index buffers retain the interaction mesh. Translucent interaction order is retained;
    subtractive stages are not batched or reordered across LDR clamps. Positive
    compatible stages on one mesh are grouped even when originally interleaved.
    Batches reference a contiguous packet list instead of copying eight full
@@ -29,18 +29,19 @@ Before either eye replay, `MobileLightingStage` walks the recorded views once:
    pressure. A view's entries are reused by both eyes. Distinct views also reuse
    an entry when their complete light/caster signatures match; differing caster
    suppression and the lightgem retain separate entries.
-4. Cache static shadow depth and the final static/dynamic result per face.
-   Retain unchanged faces across frames. When a dynamic caster moves or leaves,
-   GPU-copy the cached static face and render the changed dynamic depth, instead
-   of redrawing the scenery. Static membership, geometry, world transforms,
+4. Retain the final shadow depth per face in a single atlas. Unchanged faces
+   require no drawing or copying. When a caster changes or leaves, clear the
+   affected face and redraw its current casters. This avoids a second depth
+   atlas, depth blits and render-target switches between static and dynamic
+   layers on the tile-based GPU. Caster membership, geometry, world transforms,
    enabled alpha stages, alpha thresholds, texture matrices/reloads, light
    projection, shader reloads and buffer/storage recreation invalidate the
-   corresponding cache immediately. Moving/animating static-buffer models stay
-   in the dynamic layer until their shadow state settles for thirty frames.
+   corresponding cache immediately. Dynamic vertex buffers and animated images
+   force a refresh; there is no movement classification or grace period.
    Clipped per-light index arrays carry allocation revisions through index
    references and frame-safe draw-surface snapshots, so temporary GPU reuploads
    do not defeat reuse and recycled index-array addresses do not create hits.
-   Render global and local casters into separate regions of the atlases.
+   Render global and local casters into separate regions of the atlas.
    Empty local-caster layers consume no atlas pages or shadow samples.
    Each caster has a conservative cube-face mask computed from frame-safe
    bounds, so irrelevant faces never receive its draw. Cube-face projection uses
@@ -57,9 +58,16 @@ disabled by the OpenXR replay. Near-plane intersections are clipped before
 perspective division, and pixel bounds are rounded outward. Each batch uses the
 union of its visible lights; offscreen lights are removed before state uploads,
 and batches with no visible lights are skipped. Separated lights are split into
-tight individual draws when their union exceeds twice the sum of their separate
-rectangles. This avoids increasing submissions for small scissor-area savings.
+tight individual draws when their union exceeds the sum of their separate
+rectangles, avoiding extra shading across a large gap between lights.
 Overlapping lights retain shared material sampling.
+Draws select a specialized one-, two-, four- or eight-light program, with constant
+light-array indices. A one-light program eliminates the second texture bank and
+unused light uniforms. Positive opaque batches are grouped by program capacity;
+translucent and subtractive ordering is preserved. Uniform values are cached
+inside these private program groups and reset with program reloads. Already
+bound textures skip active-unit selection as well as the texture bind. These
+changes remove repeated driver work without caching across unrelated programs.
 Blend lights use the same eye-specific projection. Volumetric scissors are
 scaled to each work FBO, with an extra border for every blur sample. Lighting
 also requests early depth tests before material/parallax/shadow calculations.
@@ -75,9 +83,9 @@ that all stereo GPU work is eliminated. No multiview extension is required.
 
 ## Quality and memory
 
-Each default atlas is 2048 x 2048, with 24-bit depth (up to 16 MiB with a 32-bit
-physical depth allocation). The static cache adds a second atlas, at most 32 MiB
-combined at the default size. This replaces the legacy 6144 x 6144 default atlas
+The default atlas is 2048 x 2048, with 24-bit depth (up to 16 MiB with a 32-bit
+physical depth allocation). There is no second static-depth atlas.
+This replaces the legacy 6144 x 6144 default atlas
 for the mobile lighting path. Shadow faces start at up to 256 pixels, with
 smaller pages for lights of smaller projected coverage and for the lightgem.
 When necessary, packing reduces face resolution instead of dropping lights or
@@ -137,8 +145,8 @@ This is state/activity verification, not a claim that all scene visuals are
 correct. The panel is published under a mutex; the HUD never reads live backend
 counters or queries GL from the frontend. Switch it off for timing comparisons
 without the panel's draw and state-query overhead.
-The existing panel now also shows cached/refreshed shadow faces and depth-copy
-counts, prepared view types, reused camera captures, game and renderer-frontend
+The existing panel also shows retained/redrawn shadow faces and confirms the
+absence of depth copies, prepared view types, reused camera captures, game and renderer-frontend
 time from the same immutable command buffer, XR waiting, and separate render-CPU
 preparation/depth/lighting costs. CPU scopes include driver stalls and are not
 GPU stage timings. Frontend/backend time may overlap with SMP; do not sum it.
@@ -184,6 +192,7 @@ python3 bin/pack_tdm_shaders.py --check
 python3 tests/renderer/shader_install_test.py
 python3 tests/renderer/fog_policy_test.py
 python3 tests/renderer/mobile_batch_test.py
+python3 tests/renderer/mobile_submission_test.py
 g++ -std=c++14 -O2 -I Q3E/src/main/jni/darkmod tests/renderer/mobile_shadow_cache_test.cpp -o /tmp/quest-cache-test
 /tmp/quest-cache-test
 ```
@@ -192,7 +201,13 @@ The GLES tests require EGL and a GLES 3.2 driver (Mesa software rendering works)
 They compile/link the actual shipping shaders and render small offscreen targets.
 The eleven-frame cached global/local shadow sequence compares every output pixel
 against fresh rendering through movement, disappearance, cutout changes and
-storage invalidation: 49 reference draws become 23, with identical pixels.
+storage invalidation: 49 reference draws become 35, with identical pixels and
+no depth copies. This fixture establishes correctness, not comparative GPU time.
+Specialized one/two/four/eight-light programs are compared against the full
+program for both eye origins; the one-light program must eliminate bank-two
+samplers and unused array slots. Submission fixtures run the production uniform
+cache, texture binding and interaction preparation code with recorded GL calls,
+checking state changes, deferred loads, statistics, reloads and exact source meshes.
 Eight-light tests compare one combined draw with eight reference draws across
 two texture tuples and both eye origins, allowing only framebuffer rounding.
 CPU tests exercise the shipping batch rules, temporary index-buffer rotation,
@@ -221,7 +236,7 @@ an APK path to check its bundled archive. `TDM_SHADER_INSTALL_DIR` can retain th
 fresh install; set `TDM_SHADER_SOURCE_DIR` to its `glslprogs` directory when
 running the GLES checks to render from installed files.
 
-The mobile frame preparation requires both mobile programs to link before any
+The mobile frame preparation requires all four lighting programs and the shadow program to link before any
 lighting draws. A missing or failed shader reports an error instead of replaying
 draws with the depth program still active and producing black surfaces.
 

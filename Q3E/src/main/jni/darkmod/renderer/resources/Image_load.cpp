@@ -1536,6 +1536,13 @@ bool idImage::IsBound( int textureUnit ) const {
 	return false;
 }
 
+void idImage::BindToUnit(int textureUnit) {
+	if (!IsBound(textureUnit)) { GL_SelectTexture(textureUnit);Bind();return; }
+	if(r_showPrimitives.GetBool() && backEnd.viewDef && !backEnd.viewDef->IsLightGem()) {
+		frameUsed=backEnd.frameCount;++bindCount;
+	} else if(com_developer.GetBool()) ++bindCount;
+}
+
 /*
 =============
 RB_UploadScratchImage

@@ -197,6 +197,26 @@ class MobileShaderTests(unittest.TestCase):
         self.assertGreater(one[0],10)
         for i in range(3): self.assertAlmostEqual(two[i],2*one[i],delta=2)
 
+    def test_specialized_lighting_matches_general_program_for_both_eyes(self):
+        general=self.forward;g=self.gl
+        try:
+            for capacity in (1,2,4,8):
+                fragment='stages/mobile/forward.frag.glsl' if capacity==8 else f'stages/mobile/forward_{capacity}.frag.glsl'
+                program=g.program(source('stages/mobile/forward.vert.glsl'),source(fragment))
+                if capacity==1:
+                    loc=g.fn('glGetUniformLocation',C.c_int,C.c_uint,C.c_char_p)
+                    self.assertEqual(loc(program,b'u_projection1'),-1)
+                    self.assertEqual(loc(program,b'u_lightTextureSet[0]'),-1)
+                    self.assertEqual(loc(program,b'u_lightOrigin[1]'),-1)
+                for eye in (-0.03125,0.03125):
+                    for count in sorted(set((1,capacity))):
+                        self.forward=general;self.setup_forward(ambient=False,light_count=count,eye=eye)
+                        reference=g.pixels(16,16)
+                        self.forward=program;self.setup_forward(ambient=False,light_count=count,eye=eye)
+                        result=g.pixels(16,16)
+                        self.assertLessEqual(max(abs(a-b) for a,b in zip(reference,result)),1,(capacity,count,eye))
+        finally:self.forward=general
+
     def test_eight_light_batch_matches_eight_draws_with_two_texture_sets(self):
         g=self.gl;p=self.forward
         for eye in (-0.03125,0.03125):
@@ -220,7 +240,7 @@ class MobileShaderTests(unittest.TestCase):
             self.assertLessEqual(max(abs(a-b) for a,b in zip(batch,reference)),4)
             g.call('glDisable',0x0BE2)
 
-    def test_cached_global_and_local_shadow_depth_matches_fresh_frames(self):
+    def test_retained_global_and_local_shadow_depth_matches_fresh_frames(self):
         # Compile the shipping face cache policy and drive the actual shadow
         # shaders through cold/warm frames, moving/removing casters, alpha
         # changes, layout/storage invalidation, and global/local atlas rows.
@@ -232,12 +252,10 @@ using namespace MobileShadowCache;
 FaceState state[2];
 Signature key(unsigned long long v){Signature s;s.Add(v);return s;}
 extern "C" int evaluate(int i,unsigned long long st,unsigned long long dy){
- auto s=key(st),f=s;f.Add(dy);
- bool dirty=state[i].StaticDirty(s);return (dirty?1:0)|((dirty||state[i].FinalDirty(f))?2:0);
+ auto f=key(st);f.Add(dy);return state[i].FinalDirty(f)?1:0;
 }
 extern "C" void commit(int i,unsigned long long st,unsigned long long dy){
- state[i].staticContent=key(st);state[i].finalContent=state[i].staticContent;state[i].finalContent.Add(dy);
- state[i].haveStatic=state[i].haveFinal=true;
+ state[i].finalContent=key(st);state[i].finalContent.Add(dy);state[i].haveFinal=true;
 }
 extern "C" void invalidate(){state[0]={};state[1]={};}
 ''')
@@ -283,21 +301,17 @@ extern "C" void invalidate(){state[0]={};state[1]={};}
                     st=1+revision*1000+(alpha if face==0 else 0)
                     dy=0 if actor is None else 100+int((actor+1)*100)
                     action=policy.evaluate(face,st,dy)
-                    if action&1:
-                        prepare(targets[0],face,True);draw(0.,0.65,0.9);cached_draws+=1
+                    if action:
+                        prepare(targets[1],face,True);draw(0.,0.65,0.9);cached_draws+=1
                         if face==0:draw(-0.4,0.2,0.3,alpha);cached_draws+=1
-                    if action&2:
-                        g.call('glBindFramebuffer',0x8CA8,targets[0]);g.call('glBindFramebuffer',0x8CA9,targets[1]);g.call('glDisable',0x0C11)
-                        y=face*32;g.call('glBlitFramebuffer',0,y,16,y+16,0,y,16,y+16,0x00000100,0x2600)
-                        prepare(targets[1],face)
                         if actor is not None:draw(actor,-0.2,0.2);cached_draws+=1
                     policy.commit(face,st,dy)
                     prepare(targets[2],face,True);draw(0.,0.65,0.9);reference_draws+=1
                     if face==0:draw(-0.4,0.2,0.3,alpha);reference_draws+=1
                     if actor is not None:draw(actor,-0.2,0.2);reference_draws+=1
                 self.assertEqual(pixels(textures[1]),pixels(textures[2]),(actor,alpha,revision,invalidate))
-            self.assertLess(cached_draws,reference_draws//2)
-            print(f'Cached-shadow GLES sequence: {reference_draws} reference draws -> {cached_draws} draws, identical pixels')
+            self.assertLess(cached_draws,reference_draws)
+            print(f'Retained-shadow GLES sequence: {reference_draws} reference draws -> {cached_draws} draws, no depth copies, identical pixels')
 
     def test_fog_switch_removes_soft_particle_pixels_but_preserves_smoke(self):
         g = self.gl

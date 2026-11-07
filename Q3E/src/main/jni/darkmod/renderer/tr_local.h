@@ -147,6 +147,7 @@ static const int DSF_ATMOSPHERIC_FOG = 16; // immutable copy of particle-stage i
 struct viewLight_s;
 
 typedef struct drawSurf_s {
+	const struct drawSurf_s *mobileCanonical; // optional exact source mesh for multi-light fusion
 	const srfTriangles_t	*frontendGeo;			// do not use in the backend; may be modified by the frontend
 	idBounds                geometryBounds;             // frame-safe shadow face culling
 	uint64_t                shadowIndexRevision;        // frame-safe logical index identity
@@ -168,6 +169,7 @@ typedef struct drawSurf_s {
 	float					particle_radius;	// The radius of individual quads for soft particles #3878
 
 	void CopyGeo( const srfTriangles_t *tri ) {
+		mobileCanonical = nullptr;
 		frontendGeo = tri;
 		geometryBounds = tri->bounds;
 		shadowIndexRevision = tri->shadowIndexRevision;
