@@ -147,6 +147,7 @@ struct viewLight_s;
 
 typedef struct drawSurf_s {
 	const srfTriangles_t	*frontendGeo;			// do not use in the backend; may be modified by the frontend
+	idBounds                geometryBounds;             // frame-safe shadow face culling
 	int						numIndexes;				// these four are frame-safe copies for backend use
 	int						numVerts;
 	vertCacheHandle_t		indexCache;				// int				
@@ -166,6 +167,7 @@ typedef struct drawSurf_s {
 
 	void CopyGeo( const srfTriangles_t *tri ) {
 		frontendGeo = tri;
+		geometryBounds = tri->bounds;
 		numIndexes = tri->numIndexes;
 		numVerts = tri->numVerts;
 		indexCache = tri->indexCache;
@@ -416,6 +418,8 @@ typedef struct viewLight_s {
 	int						viewSeesShadowPlaneBits;
 	renderCrop_t			shadowMapPage;
 	float					maxLightDistance;			// maximum distance from light origin to light volume points
+	bool                    mobileParallel;
+	float                   mobileShadowProjection[16]; // immutable, world to directional-light clip space
 
 	bool					noFogBoundary;				// Stops fogs drawing and fogging their bounding boxes -- SteveL #3664
 	bool                    noPortalFog;				// Prevents fog from prematurely closing portals and snapping off lights, matches the material flag from Doom 3	-- nbohr1more #6282		

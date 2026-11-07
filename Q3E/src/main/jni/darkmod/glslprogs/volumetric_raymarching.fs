@@ -21,12 +21,16 @@ precision highp int;
 #pragma tdm_include "tdm_transform.glsl"
 #pragma tdm_include "tdm_lightproject.glsl"
 #pragma tdm_include "tdm_shadowmaps.glsl"
+#pragma tdm_include "tdm_mobile_shadows.glsl"
 #pragma tdm_include "tdm_dither.glsl"
 
 uniform sampler2D u_lightProjectionTexture;
 uniform sampler2D u_lightFalloffTexture;
-uniform sampler2D u_depthTexture;
-uniform sampler2D u_shadowMap;
+uniform highp sampler2D u_depthTexture;
+uniform highp sampler2D u_shadowMap;
+uniform int u_mobileShadows;
+uniform vec4 u_mobileShadowPage, u_mobileShadowParams;
+uniform mat4 u_mobileShadowProjection;
 
 uniform vec3 u_viewOrigin;
 uniform mat4 u_lightProject;
@@ -54,29 +58,34 @@ vec3 calcWithSampling(vec3 rayStart, vec3 rayVec, float minParam, float maxParam
 		float frac = 0.5;
 		if (u_randomize != 0)
 			frac = ditherFractionBayer8();
-		float ratio = (i + frac) / samplesNum;
+		float ratio = (float(i) + frac) / float(samplesNum);
 		vec3 samplePos = rayStart + rayVec * mix(minParam, maxParam, ratio);
 		// shadow test
 		vec3 light2fragment = samplePos - u_lightOrigin;
 		float lit = 1.0;
 		if (u_shadows != 0) {
+			if (u_mobileShadows != 0) {
+				lit = mobileShadow(u_shadowMap, u_mobileShadowPage, u_mobileShadowParams,
+					u_mobileShadowProjection, samplePos, u_lightOrigin, vec3(0.0), false);
+			} else {
 			float depth = ShadowAtlasForVector(u_shadowMap, u_shadowRect, light2fragment);
 			vec3 absL = abs(light2fragment);
 			float maxAbsL = max(absL.x, max(absL.y, absL.z));
 			lit = float(maxAbsL < depth);
+			}
 		}
 		vec4 texCoord = computeLightTex(u_lightProject, vec4(samplePos, 1));
 		vec3 texColor = projFalloffOfNormalLight(u_lightProjectionTexture, u_lightFalloffTexture, u_lightTextureMatrix, texCoord).rgb;
 		color += lit * texColor;
 	}
-	return color / samplesNum;
+	return color / float(samplesNum);
 }
 
 vec3 calcAverage(vec3 rayStart, vec3 rayVec, float minParam, float maxParam) {
 	// 1. suppose that nothing is shadowed
 	// 2. take average of both projection and falloff textures
-	vec4 avgProjection = textureLod(u_lightProjectionTexture, vec2(0.5), 10000);
-	vec4 avgFalloff = textureLod(u_lightFalloffTexture, vec2(0.5), 10000);
+	vec4 avgProjection = textureLod(u_lightProjectionTexture, vec2(0.5), 10000.0);
+	vec4 avgFalloff = textureLod(u_lightFalloffTexture, vec2(0.5), 10000.0);
 	return avgProjection.xyz * avgFalloff.xyz;
 }
 
@@ -127,7 +136,7 @@ void main() {
 		//then force fog to be opaque at D = cap
 		float transition = clamp((q - 0.9) / 0.1, 0.0, 1.0);
 		//exponential up to 90% of cap, perfectly opaque fog at 100% of cap (linear interpolation in-between)
-		float alpha = mix(exponential, 1, transition);
+		float alpha = mix(exponential, 1.0, transition);
 		//add a bit of unscientific dithering to smoothen out color banding
 		if (u_randomize != 0)
 			alpha = min(alpha + 1e-2 * ditherFractionBayer8(), 1.0);

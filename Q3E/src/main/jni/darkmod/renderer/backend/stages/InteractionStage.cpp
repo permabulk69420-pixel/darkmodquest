@@ -366,6 +366,8 @@ void InteractionStage::SetupLightProperties( drawInteraction_t *inter, const vie
 	const idMaterial *lightShader = vLight->lightShader;
 	inter->cubicLight = lightShader->IsCubicLight(); // nbohr1more #3881: cubemap lights
 	inter->ambientLight = lightShader->IsAmbientLight();
+	inter->lightImage = lightStage->texture.image;
+	inter->lightFalloffImage = vLight->falloffImage;
 
 	idPlane lightProject[4];
 	R_GlobalPlaneToLocal( surf->space->modelMatrix, vLight->lightProject[0], lightProject[0] );
@@ -386,6 +388,14 @@ void InteractionStage::SetupLightProperties( drawInteraction_t *inter, const vie
 }
 
 void InteractionStage::ProcessSingleSurface( const viewLight_t *vLight, const shaderStage_t *lightStage, const drawSurf_t *surf, int lightFlags ) {
+	GenerateInteractions( vLight, lightStage, surf, [this, lightFlags]( const drawInteraction_t &value ) {
+		drawInteraction_t inter = value;
+		PrepareDrawCommand( &inter, lightFlags );
+	} );
+}
+
+void InteractionStage::GenerateInteractions( const viewLight_t *vLight, const shaderStage_t *lightStage,
+	const drawSurf_t *surf, const InteractionCallback &emit ) {
 	const idMaterial	*material = surf->material;
 	const float			*surfaceRegs = surf->shaderRegisters;
 
@@ -467,11 +477,11 @@ void InteractionStage::ProcessSingleSurface( const viewLight_t *vLight, const sh
 			if (!inter.diffuseImage && !inter.specularImage)
 				continue;
 
-			PrepareDrawCommand( &inter, lightFlags );
+			emit( inter );
 		}
 	}
 	else {
-		drawInteraction_t	inter;
+		drawInteraction_t inter = {};
 		inter.surf = surf;
 		SetupLightProperties( &inter, vLight, lightStage, surf );
 
@@ -502,7 +512,7 @@ void InteractionStage::ProcessSingleSurface( const viewLight_t *vLight, const sh
 			}
 			case SL_BUMP: {				
 				if ( !r_skipBump.GetBool() ) {
-					PrepareDrawCommand( &inter, lightFlags ); // draw any previous interaction
+					emit( inter ); // draw any previous interaction
 					ClearInter();
 					R_SetDrawInteraction( surfaceStage, surfaceRegs, &inter.bumpImage, inter.bumpMatrix, NULL );
 				}
@@ -511,7 +521,7 @@ void InteractionStage::ProcessSingleSurface( const viewLight_t *vLight, const sh
 			case SL_PARALLAX: {				
 				if ( !r_skipParallax.GetBool() ) {
 					if ( inter.parallaxImage ) {
-						PrepareDrawCommand( &inter, lightFlags );
+						emit( inter );
 						ClearInter();
 					}
 					R_SetDrawInteraction( surfaceStage, surfaceRegs, &inter.parallaxImage, inter.parallaxMatrix, NULL );
@@ -533,7 +543,7 @@ void InteractionStage::ProcessSingleSurface( const viewLight_t *vLight, const sh
 			}
 			case SL_DIFFUSE: {
 				if ( inter.diffuseImage ) {
-					PrepareDrawCommand( &inter, lightFlags );
+					emit( inter );
 					ClearInter();
 				}
 				R_SetDrawInteraction( surfaceStage, surfaceRegs, &inter.diffuseImage,
@@ -551,7 +561,7 @@ void InteractionStage::ProcessSingleSurface( const viewLight_t *vLight, const sh
 					break;
 				}
 				if ( inter.specularImage ) {
-					PrepareDrawCommand( &inter, lightFlags );
+					emit( inter );
 					ClearInter();
 				}
 				R_SetDrawInteraction( surfaceStage, surfaceRegs, &inter.specularImage,
@@ -567,7 +577,7 @@ void InteractionStage::ProcessSingleSurface( const viewLight_t *vLight, const sh
 		}
 
 		// draw the final interaction
-		PrepareDrawCommand( &inter, lightFlags );
+		emit( inter );
 	}
 }
 

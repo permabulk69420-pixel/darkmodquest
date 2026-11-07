@@ -52,6 +52,7 @@ void RenderBackend::Init() {
 	lightPassesStage.Init();
 	frobOutlineStage.Init();
 	tonemapStage.Init();
+	mobileLightingStage.Init();
 
 	lightgemFbo = frameBuffers->CreateFromGenerator( "lightgem", CreateLightgemFbo );
 	qglGenBuffers( 3, lightgemPbos );
@@ -72,6 +73,7 @@ void RenderBackend::Shutdown() {
 	if (!initialized)
 		return;
 	vrBackend->Destroy();
+	mobileLightingStage.Shutdown();
 	qglDeleteBuffers( 3, lightgemPbos );
 	
 	tonemapStage.Shutdown();
@@ -123,7 +125,11 @@ void RenderBackend::DrawView( const viewDef_t *viewDef, bool colorIsBackground )
 		if( ambientOcclusion->ShouldEnableForCurrentView() ) {
 			ambientOcclusion->ComputeSSAOFromDepth();
 		}
-		DrawShadowsAndInteractions( viewDef );
+		if ( mobileLightingStage.HasView(viewDef) ) {
+			mobileLightingStage.Draw(viewDef);
+		} else {
+			DrawShadowsAndInteractions( viewDef );
+		}
 	}
 
 	int beforePostproc = 0;

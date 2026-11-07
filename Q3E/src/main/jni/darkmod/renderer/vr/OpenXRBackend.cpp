@@ -1220,11 +1220,17 @@ void OpenXRBackend::Impl::RenderFrame( const frameData_t *fd ) {
 
 		try {
 			timer.BeginGpu();
+			// The frontend has already culled a combined stereo view. Shadow
+			// depth and material/light packets are independent of the late eye
+			// pose: build once, before either eye starts its tile render pass.
+			renderBackend->PrepareStereoFrame( fd->cmdHead );
 			ExecutePass( fd, PASS_LEFT, eyeSwapchains[0].CurrentFrameBuffer() );
 			ExecutePass( fd, PASS_RIGHT, eyeSwapchains[1].CurrentFrameBuffer() );
 			ExecutePass( fd, PASS_UI, uiSwapchain.CurrentFrameBuffer() );
+			renderBackend->FinishStereoFrame();
 			timer.EndGpu();
 		} catch ( ... ) {
+			renderBackend->FinishStereoFrame();
 			timer.EndGpu();
 			// the engine reports errors with exceptions: leave everything in a state that lets the next frame start cleanly
 			frameBuffers->defaultFbo = realDefault;

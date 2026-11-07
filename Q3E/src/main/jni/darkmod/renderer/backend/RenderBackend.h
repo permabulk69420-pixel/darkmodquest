@@ -23,6 +23,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #include "renderer/backend/stages/LightPassesStage.h"
 #include "renderer/backend/stages/TonemapStage.h"
 #include "renderer/backend/stages/VolumetricStage.h"
+#include "renderer/backend/stages/MobileLightingStage.h"
 #include "renderer/tr_local.h"
 
 class FrameBuffer;
@@ -38,11 +39,15 @@ public:
 	void DrawLightgem( const viewDef_t *viewDef, byte *lightgemData );
 
 	void EndFrame();
+	void PrepareStereoFrame( const emptyCommand_t *commands ) { mobileLightingStage.BeginFrame(commands); }
+	void FinishStereoFrame() { mobileLightingStage.EndFrame(); }
+	MobileLightingStage &MobileLighting() { return mobileLightingStage; }
 
 	void Tonemap();
 
 private:
 	DepthStage depthStage;
+	MobileLightingStage mobileLightingStage;
 	InteractionStage interactionStage;
 	StencilShadowStage stencilShadowStage;
 	ShadowMapStage shadowMapStage;

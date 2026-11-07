@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+"""Headless GLES shader/lighting regression tests (EGL, no game data or headset).
+
+Requires a GLES 3.2 driver and EGL. Use EGL_PLATFORM=surfaceless on Mesa.
+This renders tiny test targets; it does not implement a desktop VR/preview path.
+"""
+import ctypes as C
+import ctypes.util
+import os
+from pathlib import Path
+import re
+import unittest
+
+ROOT = Path(__file__).resolve().parents[2]
+SHADERS = ROOT / 'Q3E/src/main/jni/darkmod/glslprogs'
+
+def source(path):
+    seen = set()
+    def expand(name):
+        if name in seen:
+            return ''
+        seen.add(name)
+        text = (SHADERS / name).read_text()
+        text = re.sub(r'^\s*#pragma tdm_include "([^"]+)".*$', lambda m: expand(m[1]), text, flags=re.M)
+        return re.sub(r'^\s*#pragma tdm_define .*$', '', text, flags=re.M)
+    return expand(path)
+
+class GLES:
+    def __init__(self):
+        self.egl = C.CDLL(ctypes.util.find_library('EGL') or 'libEGL.so.1')
+        def egl(name, result, args):
+            f = getattr(self.egl, name); f.restype = result; f.argtypes = args
+            return f
+        ptr, I = C.c_void_p, C.c_int
+        self.proc = egl('eglGetProcAddress', ptr, [C.c_char_p])
+        get_display = C.CFUNCTYPE(ptr, C.c_uint, ptr, C.POINTER(I))(self.proc(b'eglGetPlatformDisplayEXT'))
+        self.display = get_display(0x31DD, None, None)  # EGL_PLATFORM_SURFACELESS_MESA
+        major, minor = I(), I()
+        assert egl('eglInitialize', I, [ptr, C.POINTER(I), C.POINTER(I)])(self.display, C.byref(major), C.byref(minor))
+        assert egl('eglBindAPI', I, [C.c_uint])(0x30A0)
+        attrs = (I*13)(0x3033,1,0x3040,0x40,0x3024,8,0x3023,8,0x3022,8,0x3021,8,0x3038)
+        config, count = ptr(), I()
+        assert egl('eglChooseConfig',I,[ptr,C.POINTER(I),C.POINTER(ptr),I,C.POINTER(I)])(self.display,attrs,C.byref(config),1,C.byref(count)) and count.value
+        context_attrs = (I*3)(0x3098,3,0x3038)
+        self.context = egl('eglCreateContext',ptr,[ptr,ptr,ptr,C.POINTER(I)])(self.display,config,None,context_attrs)
+        assert self.context
+        assert egl('eglMakeCurrent',I,[ptr,ptr,ptr,ptr])(self.display,None,None,self.context)
+        self.terminate = egl('eglTerminate',I,[ptr])
+        self.destroy = egl('eglDestroyContext',I,[ptr,ptr])
+        self.make_current = egl('eglMakeCurrent',I,[ptr,ptr,ptr,ptr])
+        self.cache = {}
+    def fn(self, name, ret, *args):
+        if name not in self.cache:
+            address = self.proc(name.encode())
+            assert address, name
+            self.cache[name] = C.CFUNCTYPE(ret,*args)(address)
+        return self.cache[name]
+    def call(self, name, *values):
+        args = tuple(C.c_float if isinstance(v,float) else C.c_void_p if isinstance(v,(C.Array,C.c_void_p)) or v is None else C.c_uint for v in values)
+        return self.fn(name,None,*args)(*values)
+    def gen(self, name):
+        value = C.c_uint()
+        self.fn(name,None,C.c_int,C.POINTER(C.c_uint))(1,C.byref(value))
+        return value.value
+    def error(self):
+        return self.fn('glGetError',C.c_uint)()
+    def program(self, vs, fs):
+        program = self.fn('glCreateProgram',C.c_uint)()
+        for kind, text in ((0x8B31,vs),(0x8B30,fs)):
+            shader = self.fn('glCreateShader',C.c_uint,C.c_uint)(kind)
+            ptr = C.c_char_p(text.encode())
+            self.fn('glShaderSource',None,C.c_uint,C.c_int,C.POINTER(C.c_char_p),C.c_void_p)(shader,1,C.byref(ptr),None)
+            self.call('glCompileShader',shader)
+            ok = C.c_int()
+            self.fn('glGetShaderiv',None,C.c_uint,C.c_uint,C.POINTER(C.c_int))(shader,0x8B81,C.byref(ok))
+            if not ok.value:
+                log = C.create_string_buffer(65536)
+                self.fn('glGetShaderInfoLog',None,C.c_uint,C.c_int,C.c_void_p,C.c_void_p)(shader,len(log),None,log)
+                raise AssertionError(log.value.decode())
+            self.call('glAttachShader',program,shader)
+            self.call('glDeleteShader',shader)
+        for index,name in ((0,'attr_Position'),(8,'attr_TexCoord'),(2,'attr_Normal'),(3,'attr_Color'),(9,'attr_Tangent'),(10,'attr_Bitangent')):
+            self.fn('glBindAttribLocation',None,C.c_uint,C.c_uint,C.c_char_p)(program,index,name.encode())
+        self.call('glLinkProgram',program)
+        ok=C.c_int()
+        self.fn('glGetProgramiv',None,C.c_uint,C.c_uint,C.POINTER(C.c_int))(program,0x8B82,C.byref(ok))
+        if not ok.value:
+            log=C.create_string_buffer(65536)
+            self.fn('glGetProgramInfoLog',None,C.c_uint,C.c_int,C.c_void_p,C.c_void_p)(program,len(log),None,log)
+            raise AssertionError(log.value.decode())
+        return program
+    def uniform(self, program, name, value, kind='f'):
+        loc=self.fn('glGetUniformLocation',C.c_int,C.c_uint,C.c_char_p)(program,name.encode())
+        if loc < 0: return
+        if not isinstance(value,(list,tuple)): value=[value]
+        if kind=='m':
+            data=(C.c_float*len(value))(*value)
+            self.fn('glUniformMatrix4fv',None,C.c_int,C.c_int,C.c_ubyte,C.c_void_p)(loc,len(value)//16,0,data)
+        elif kind=='i':
+            self.fn('glUniform1i',None,C.c_int,C.c_int)(loc,value[0])
+        else:
+            self.fn('glUniform%df'%len(value),None,C.c_int,*([C.c_float]*len(value)))(loc,*value)
+    def texture(self, unit, rgba=(255,255,255,255), depth=False, cube=False, size=1):
+        texture=self.gen('glGenTextures')
+        self.call('glActiveTexture',0x84C0+unit)
+        target=0x8513 if cube else 0x0DE1
+        self.call('glBindTexture',target,texture)
+        for enum in (0x2800,0x2801): self.call('glTexParameteri',target,enum,0x2600)
+        for enum in (0x2802,0x2803): self.call('glTexParameteri',target,enum,0x812F)
+        data=None if depth else (C.c_ubyte*4)(*rgba)
+        for face in range(6 if cube else 1):
+            self.fn('glTexImage2D',None,C.c_uint,C.c_int,C.c_int,C.c_int,C.c_int,C.c_int,C.c_uint,C.c_uint,C.c_void_p)(
+                0x8515+face if cube else target,0,0x81A6 if depth else 0x8058,size,size,0,0x1902 if depth else 0x1908,0x1405 if depth else 0x1401,data)
+        return texture
+    def target(self, width=16, height=16, depth_texture=None):
+        fbo=self.gen('glGenFramebuffers'); self.call('glBindFramebuffer',0x8D40,fbo)
+        tex=depth_texture or self.texture(0,size=1)
+        if not depth_texture:
+            self.fn('glTexImage2D',None,C.c_uint,C.c_int,C.c_int,C.c_int,C.c_int,C.c_int,C.c_uint,C.c_uint,C.c_void_p)(0x0DE1,0,0x8058,width,height,0,0x1908,0x1401,None)
+        self.call('glFramebufferTexture2D',0x8D40,0x8D00 if depth_texture else 0x8CE0,0x0DE1,tex,0)
+        if depth_texture:
+            none=(C.c_uint*1)(0); self.call('glDrawBuffers',1,none); self.call('glReadBuffer',0)
+        assert self.fn('glCheckFramebufferStatus',C.c_uint,C.c_uint)(0x8D40)==0x8CD5
+        return fbo
+    def quad(self,z=-4.0):
+        vao=self.gen('glGenVertexArrays'); self.call('glBindVertexArray',vao)
+        buffer=self.gen('glGenBuffers'); self.call('glBindBuffer',0x8892,buffer)
+        points=[(-10,-10),(10,-10),(10,10),(-10,-10),(10,10),(-10,10)]
+        data=(C.c_float*30)(*[v for x,y in points for v in (x,y,z,0.5,0.5)])
+        self.fn('glBufferData',None,C.c_uint,C.c_ssize_t,C.c_void_p,C.c_uint)(0x8892,C.sizeof(data),data,0x88E4)
+        for loc,size,offset in ((0,3,0),(8,2,12)):
+            self.call('glEnableVertexAttribArray',loc)
+            self.fn('glVertexAttribPointer',None,C.c_uint,C.c_int,C.c_uint,C.c_ubyte,C.c_int,C.c_void_p)(loc,size,0x1406,0,20,C.c_void_p(offset))
+        for index,value in ((2,[0.,0.,1.,0.]),(9,[1.,0.,0.,0.]),(10,[0.,1.,0.,0.]),(3,[1.,1.,1.,1.])):
+            self.fn('glVertexAttrib4f',None,C.c_uint,C.c_float,C.c_float,C.c_float,C.c_float)(index,*value)
+    def pixel(self):
+        data=(C.c_ubyte*4)()
+        self.fn('glReadPixels',None,C.c_int,C.c_int,C.c_int,C.c_int,C.c_uint,C.c_uint,C.c_void_p)(8,8,1,1,0x1908,0x1401,data)
+        assert self.error()==0
+        return list(data)
+    def close(self):
+        self.make_current(self.display,None,None,None)
+        self.destroy(self.display,self.context); self.terminate(self.display)
+
+IDENTITY=[1.,0.,0.,0.,0.,1.,0.,0.,0.,0.,1.,0.,0.,0.,0.,1.]
+PROJECTION=[1.,0.,0.,0.,0.,1.,0.,0.,0.,0.,-1.,-1.,0.,0.,-2.,0.]
+
+class MobileShaderTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.gl=GLES()
+        cls.forward=cls.gl.program(source('stages/mobile/forward.vert.glsl'),source('stages/mobile/forward.frag.glsl'))
+        cls.shadow=cls.gl.program(source('stages/mobile/shadow.vert.glsl'),source('stages/mobile/shadow.frag.glsl'))
+    @classmethod
+    def tearDownClass(cls): cls.gl.close()
+    def setup_forward(self, ambient=True, light_count=1, eye=-0.25):
+        g=self.gl; p=self.forward
+        g.target(); g.call('glViewport',0,0,16,16); g.call('glUseProgram',p)
+        g.call('glDisable',0x0B71); g.call('glDisable',0x0BE2); g.call('glDisable',0x0B90)
+        g.call('glDisable',0x0B44); g.call('glDisable',0x0C11)
+        for i in range(16): g.texture(i,cube=i in (5,7,8,10,12,13))
+        g.texture(0,(128,128,255,255)); g.texture(1,(128,128,128,255));g.texture(2,(100,100,100,255))
+        for name,unit in dict(normalTexture=0,diffuseTexture=1,specularTexture=2,parallaxTexture=3,projection0=4,cube0=5,falloff0=6,
+                              ambientDiffuse0=7,ambientSpecular0=8,projection1=9,cube1=10,falloff1=11,ambientDiffuse1=12,ambientSpecular1=13,
+                              shadowAtlas=14,ssaoTexture=15).items(): g.uniform(p,'u_'+name,unit,'i')
+        for name in ('modelMatrix','modelViewMatrix'): g.uniform(p,'u_'+name,IDENTITY,'m')
+        g.uniform(p,'u_projectionMatrix',PROJECTION,'m');g.uniform(p,'u_viewOrigin',[eye,0.,0.])
+        g.uniform(p,'u_ambientParams',[0.,1.]);g.uniform(p,'u_clipPlane',[0.,0.,0.,0.])
+        g.uniform(p,'u_lightCount',light_count,'i');g.uniform(p,'u_flags',0x24,'i');g.uniform(p,'u_vertexColorMode',0,'i')
+        g.uniform(p,'u_shadowFilter',1,'i')
+        for name in ('bumpMatrix','diffuseMatrix','specularMatrix'):
+            g.uniform(p,'u_'+name+'[0]',[1.,0.,0.,0.]);g.uniform(p,'u_'+name+'[1]',[0.,1.,0.,0.])
+        for i in range(2):
+            g.uniform(p,f'u_lightFlags[{i}]',0x100000 if ambient else 0,'i')
+            g.uniform(p,f'u_lightOrigin[{i}]',[2.,0.,0.]);g.uniform(p,f'u_shadowParams[{i}]',[0.,0.,0.,0.])
+            g.uniform(p,f'u_diffuseColor[{i}]',[0.25,0.25,0.25,1.]);g.uniform(p,f'u_specularColor[{i}]',[0.15,0.15,0.15,1.])
+            # Each column is a projection/falloff plane, as in drawInteraction_t.
+            g.uniform(p,f'u_lightProjection[{i}]',[0.,0.,0.,0.5, 0.,0.,0.,0.5, 0.,0.,0.,1., 0.,0.,0.,0.5],'m')
+            g.uniform(p,f'u_lightTextureMatrix[{2*i}]',[1.,0.,0.,0.]);g.uniform(p,f'u_lightTextureMatrix[{2*i+1}]',[0.,1.,0.,0.])
+        g.quad();g.call('glDrawArrays',0x0004,0,6)
+        return g.pixel()
+    def test_batched_lights_add_without_repeating_material_draw(self):
+        one=self.setup_forward(light_count=1); two=self.setup_forward(light_count=2)
+        self.assertGreater(one[0],10)
+        for i in range(3): self.assertAlmostEqual(two[i],2*one[i],delta=2)
+    def test_eye_origin_changes_specular_shading(self):
+        left=self.setup_forward(ambient=False,eye=-1.5)
+        right=self.setup_forward(ambient=False,eye=1.5)
+        self.assertGreater(abs(left[0]-right[0]),3,(left,right))
+    def test_independent_projection_textures_and_light_volume_clipping(self):
+        self.setup_forward(light_count=2)
+        g=self.gl; p=self.forward
+        g.texture(4,(255,0,0,255));g.texture(9,(0,0,255,255))
+        g.call('glDrawArrays',4,0,6); pixel=g.pixel()
+        self.assertGreater(pixel[0],10);self.assertGreater(pixel[2],10);self.assertEqual(pixel[1],0)
+        # The canonical full mesh is drawn once: an out-of-volume light must
+        # contribute zero even when the mesh itself covers the whole viewport.
+        for i in range(2):
+            g.uniform(p,f'u_lightProjection[{i}]',[0.,0.,0.,2.,0.,0.,0.,0.5,0.,0.,0.,1.,0.,0.,0.,0.5],'m')
+        g.call('glDrawArrays',4,0,6);self.assertEqual(g.pixel()[:3],[0,0,0])
+    def test_mirror_clip_plane_is_applied_to_forward_lighting(self):
+        self.setup_forward()
+        g=self.gl
+        g.call('glClearColor',0.,0.,0.,0.);g.call('glClear',0x00004000)
+        g.uniform(self.forward,'u_clipPlane',[0.,0.,0.,-1.]);g.call('glDrawArrays',4,0,6)
+        self.assertEqual(g.pixel(),[0,0,0,0])
+    def test_volumetric_shader_links_with_mobile_shadows(self):
+        self.gl.program(source('volumetric.vs'),source('volumetric_raymarching.fs'))
+    def test_shadow_depth_and_local_caster_mask(self):
+        g=self.gl
+        depth=g.texture(14,depth=True,size=64); target=g.target(depth_texture=depth)
+        g.call('glViewport',0,0,64,64);g.call('glDisable',0x0C11)
+        g.call('glClearDepthf',1.);g.call('glDepthMask',1);g.call('glClear',0x00000100)
+        g.call('glEnable',0x0B71);g.call('glDepthFunc',0x0201)
+        g.call('glUseProgram',self.shadow)
+        for name in ('modelMatrix','textureMatrix'): g.uniform(self.shadow,'u_'+name,IDENTITY,'m')
+        g.uniform(self.shadow,'u_lightOrigin',[0.,0.,0.]);g.uniform(self.shadow,'u_parallel',0,'i')
+        g.uniform(self.shadow,'u_face',4,'i');g.uniform(self.shadow,'u_alphaTest',-1.)
+        # +Z global face = column 1, row 1 for face 4, face size=16.
+        g.call('glViewport',16,16,16,16);g.quad(z=4.);g.call('glDrawArrays',0x0004,0,6)
+        vs='#version 320 es\nprecision highp float; in vec4 attr_Position; void main(){ gl_Position=vec4(attr_Position.xy,0,1); }'
+        fs='#version 320 es\nprecision highp float; precision highp int;\n'+source('tdm_mobile_shadows.glsl')+'''
+        uniform highp sampler2D atlas; uniform vec3 world; uniform vec4 params; uniform int filtered;
+        out vec4 color;
+        void main(){float s=mobileShadow(atlas,vec4(0,0,0.25,1.0/64.0),params,mat4(1),world,vec3(0),normalize(-world),filtered!=0); color=vec4(s,s,s,1);}
+        '''
+        p=g.program(vs,fs);g.target();g.call('glUseProgram',p);g.call('glViewport',0,0,16,16);g.call('glDisable',0x0B71)
+        g.call('glActiveTexture',0x84C0+14);g.call('glBindTexture',0x0DE1,depth);g.uniform(p,'atlas',14,'i')
+        g.uniform(p,'world',[0.,0.,8.]);g.uniform(p,'params',[1.,0.,0.,1.]);g.quad();g.call('glDrawArrays',4,0,6)
+        self.assertLess(g.pixel()[0],5)  # global caster blocks the receiver
+        g.uniform(p,'filtered',1,'i');g.call('glDrawArrays',4,0,6);self.assertLess(g.pixel()[0],5)
+        g.uniform(p,'world',[0.,0.,2.]);g.call('glDrawArrays',4,0,6);self.assertGreater(g.pixel()[0],250)
+        g.uniform(p,'world',[0.,0.,-8.]);g.call('glDrawArrays',4,0,6);self.assertGreater(g.pixel()[0],250) # another face is clear
+        # Render only a local caster; local receivers must remain unshadowed.
+        g.call('glBindFramebuffer',0x8D40,target);g.call('glClear',0x00000100);g.call('glEnable',0x0B71)
+        g.call('glUseProgram',self.shadow);g.call('glViewport',16,48,16,16);g.quad(z=4.);g.call('glDrawArrays',4,0,6)
+        g.target();g.call('glViewport',0,0,16,16);g.call('glDisable',0x0B71);g.call('glUseProgram',p)
+        g.uniform(p,'world',[0.,0.,8.]);g.uniform(p,'params',[1.,0.,0.,1.]);g.quad();g.call('glDrawArrays',4,0,6)
+        self.assertGreater(g.pixel()[0],250)
+        g.uniform(p,'params',[1.,1.,0.,1.]);g.call('glDrawArrays',4,0,6);self.assertLess(g.pixel()[0],5)
+        # A cutout caster with zero alpha must not fill the depth atlas.
+        g.call('glBindFramebuffer',0x8D40,target);g.call('glClear',0x00000100);g.call('glEnable',0x0B71)
+        g.call('glUseProgram',self.shadow);g.uniform(self.shadow,'u_alphaTest',0.5);g.uniform(self.shadow,'u_texture',0,'i')
+        g.texture(0,(255,255,255,0));g.call('glViewport',16,16,16,16);g.quad(z=4.);g.call('glDrawArrays',4,0,6)
+        g.target();g.call('glViewport',0,0,16,16);g.call('glDisable',0x0B71);g.call('glUseProgram',p)
+        g.uniform(p,'params',[1.,1.,0.,1.]);g.quad();g.call('glDrawArrays',4,0,6);self.assertGreater(g.pixel()[0],250)
+        # Render and sample every cube direction with the actual depth shader.
+        for face in range(6):
+            axis=face//2; normal=[0.,0.,0.];normal[axis]=-1. if face%2 else 1.
+            tangent=[0.,1.,0.] if axis==0 else [1.,0.,0.]
+            bitangent=[0.,1.,0.] if axis==2 else [0.,0.,1.]
+            model=tangent+[0.]+bitangent+[0.]+normal+[0.]+[4.*v for v in normal]+[1.]
+            g.call('glBindFramebuffer',0x8D40,target);g.call('glClear',0x00000100);g.call('glEnable',0x0B71)
+            g.call('glUseProgram',self.shadow);g.uniform(self.shadow,'u_alphaTest',-1.)
+            g.uniform(self.shadow,'u_modelMatrix',model,'m');g.uniform(self.shadow,'u_face',face,'i')
+            g.call('glViewport',(face%3)*16,(face//3)*16,16,16);g.quad(z=0.);g.call('glDrawArrays',4,0,6)
+            g.target();g.call('glViewport',0,0,16,16);g.call('glDisable',0x0B71);g.call('glUseProgram',p)
+            g.uniform(p,'params',[1.,0.,0.,1.]);g.uniform(p,'world',[8.*v for v in normal]);g.quad();g.call('glDrawArrays',4,0,6)
+            self.assertLess(g.pixel()[0],5,face)
+        # Directional lights use a fitted orthographic projection, not the
+        # engine's far-away point-light approximation.
+        g.call('glBindFramebuffer',0x8D40,target);g.call('glClear',0x00000100);g.call('glEnable',0x0B71)
+        g.call('glUseProgram',self.shadow);g.uniform(self.shadow,'u_parallel',1,'i')
+        for name in ('modelMatrix','shadowProjection'):g.uniform(self.shadow,'u_'+name,IDENTITY,'m')
+        g.call('glViewport',0,0,16,16);g.quad(z=0.);g.call('glDrawArrays',4,0,6)
+        g.target();g.call('glViewport',0,0,16,16);g.call('glDisable',0x0B71);g.call('glUseProgram',p)
+        g.uniform(p,'params',[1.,0.,1.,1.]);g.uniform(p,'world',[0.,0.,0.8]);g.quad();g.call('glDrawArrays',4,0,6)
+        self.assertLess(g.pixel()[0],5)
+        g.uniform(p,'world',[0.,0.,-0.8]);g.call('glDrawArrays',4,0,6);self.assertGreater(g.pixel()[0],250)
+
+if __name__=='__main__':
+    os.environ.setdefault('EGL_PLATFORM','surfaceless')
+    unittest.main(verbosity=2)

@@ -21,6 +21,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #include "renderer/resources/Image.h"
 #include "renderer/backend/GLSLProgramManager.h"
 #include "renderer/backend/GLSLUniforms.h"
+#include "renderer/backend/RenderBackend.h"
 
 VolumetricStage volumetricImpl;
 VolumetricStage *volumetric = &volumetricImpl;
@@ -211,7 +212,10 @@ void VolumetricStage::PrepareRaymarching(TemporaryData &data) {
 	// note: all other noshadows settings already checked in R_SetLightDefViewLight
 	if ( viewLight->volumetricNoshadows )
 		data.useShadows = false;
-	if ( viewLight->shadowMapPage.width <= 0 ) {
+	if ( renderBackend->MobileLighting().HasView(viewDef) ) {
+		idVec4 page, params; idMat4 projection;
+		data.useShadows &= renderBackend->MobileLighting().GetShadow(viewDef, viewLight, page, params, projection);
+	} else if ( viewLight->shadowMapPage.width <= 0 ) {
 		// shadow map missing?
 		assert(data.useShadows == false);
 		data.useShadows = false;
@@ -343,8 +347,22 @@ void VolumetricStage::RenderRaymarching(const TemporaryData &data) {
 		DEFINE_UNIFORM( int, shadows );
 		DEFINE_UNIFORM( vec4, shadowRect );
 		DEFINE_UNIFORM( sampler, shadowMap );
+		DEFINE_UNIFORM( int, mobileShadows );
+		DEFINE_UNIFORM( vec4, mobileShadowPage );
+		DEFINE_UNIFORM( vec4, mobileShadowParams );
+		DEFINE_UNIFORM( mat4, mobileShadowProjection );
 	};
 	RaymarchingUniforms *uniforms = raymarchingShader->GetUniformGroup<RaymarchingUniforms>();
+	const bool mobile = renderBackend->MobileLighting().HasView(viewDef);
+	uniforms->mobileShadows.Set(mobile);
+	if ( mobile && data.useShadows ) {
+		idVec4 page, params; idMat4 projection;
+		renderBackend->MobileLighting().GetShadow(viewDef, viewLight, page, params, projection);
+		float matrix[16]; projection.ToGL(matrix);
+		uniforms->mobileShadowPage.Set(page);
+		uniforms->mobileShadowParams.Set(params);
+		uniforms->mobileShadowProjection.Set(matrix);
+	}
 
 	uniforms->alphaMode.Set( data.alphaMode );
 	uniforms->dust.Set( data.dust );
@@ -385,7 +403,8 @@ void VolumetricStage::RenderRaymarching(const TemporaryData &data) {
 
 	uniforms->shadowMap.Set( 4 );
 	GL_SelectTexture( 4 );
-	globalImages->shadowAtlas->Bind();
+	if ( mobile ) renderBackend->MobileLighting().BindShadowTexture(4);
+	else globalImages->shadowAtlas->Bind();
 
 	RenderFrustum( raymarchingShader );
 }

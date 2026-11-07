@@ -50,6 +50,7 @@ jobs:
 
     - name: Build APK (TDM only, arm64-v8a)
       run: |
+        python3 bin/pack_tdm_shaders.py --check
         chmod +x ./gradlew
         # every game except The Dark Mod is switched off so only TDM's native library is compiled
         OFF="-DGAME_DOOM3=OFF,-DGAME_RTCW=OFF,-DGAME_QUAKE3=OFF,-DGAME_QUAKE2=OFF,-DGAME_QUAKE1=OFF"

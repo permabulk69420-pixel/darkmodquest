@@ -651,6 +651,15 @@ void RB_ExecuteBackEndCommands( const emptyCommand_t *cmds ) {
 	// needed for editor rendering
 	RB_SetDefaultGLState();
 
+	// Non-swapping command chains (captures, loading/UI model views, lightgem
+	// flushes) can also execute while OpenXR is active. Give them the same mobile
+	// renderer without replacing or invalidating an outer stereo frame's plan.
+	struct MobileFrameScope {
+		bool owns;
+		~MobileFrameScope() { if ( owns ) renderBackend->FinishStereoFrame(); }
+	} mobileFrame { R_UseMobileLighting() && !renderBackend->MobileLighting().HasFrame() };
+	if ( mobileFrame.owns ) renderBackend->PrepareStereoFrame(cmds);
+
 	// true: we currently render views to "primary framebuffer", which can be e.g. multisampled
 	// false: we finished main rendering and now render to GUI framebuffer (or to default one directly)
 	bool drawToPrimary = true;

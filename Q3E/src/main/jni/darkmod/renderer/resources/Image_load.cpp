@@ -558,7 +558,15 @@ void idImageScratch::GenerateAttachment( int width, int height, GLenum format, G
 		dataFormat = GL_DEPTH_STENCIL;
 		dataType = GL_UNSIGNED_INT_24_8;
 		break;
-	case GL_DEPTH_COMPONENT32F: case GL_DEPTH_COMPONENT24: case GL_DEPTH_COMPONENT16: case GL_DEPTH_COMPONENT:
+	case GL_DEPTH_COMPONENT24:
+		dataFormat = GL_DEPTH_COMPONENT;
+		dataType = GL_UNSIGNED_INT;
+		break;
+	case GL_DEPTH_COMPONENT16:
+		dataFormat = GL_DEPTH_COMPONENT;
+		dataType = GL_UNSIGNED_SHORT;
+		break;
+	case GL_DEPTH_COMPONENT32F: case GL_DEPTH_COMPONENT:
 		dataFormat = GL_DEPTH_COMPONENT;
 		break;
 	case GL_RED: case GL_R8: case GL_R16: case GL_R16F: case GL_R32F:

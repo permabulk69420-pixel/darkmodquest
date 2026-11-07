@@ -60,7 +60,7 @@ float ShadowAtlasForVector(in sampler2D shadowMapTexture, vec4 shadowRect, vec3 
 	float d = textureLod(shadowMapTexture, shadow2d, 0.0).r;
 	return 1.0 / (1.0 - d);
 }
-#if TDM_allow_ARB_texture_gather
+#if defined(TDM_allow_ARB_texture_gather) && TDM_allow_ARB_texture_gather
 vec4 ShadowAtlasForVector4(in sampler2D shadowMapTexture, vec4 shadowRect, vec3 lightVec, out vec4 sampleWeights) {
 	int faceIdx;
 	vec3 v1 = CubeMapDirectionToUv(lightVec, faceIdx);
@@ -106,7 +106,7 @@ float computeShadowMapCoefficient(
 
 	//process central shadow sample
 	float centerFragZ = maxAbsL;
-#if STGATILOV_USEGATHER && defined(GL_ARB_texture_gather)
+#if defined(STGATILOV_USEGATHER) && STGATILOV_USEGATHER && defined(GL_ARB_texture_gather)
 	vec4 wgt;
 	vec4 centerBlockerZ = ShadowAtlasForVector4(shadowMap, shadowRect, L, wgt);
 	float lit = dot(wgt, step(centerFragZ - errorMargin, centerBlockerZ));

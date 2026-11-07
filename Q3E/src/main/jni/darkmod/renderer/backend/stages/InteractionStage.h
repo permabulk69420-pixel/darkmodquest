@@ -34,6 +34,12 @@ public:
 
 	bool ShouldDrawLight( const viewLight_t *vLight ) const;
 
+	// Material evaluation is shared by the desktop and mobile renderers. This does
+	// not issue GL commands: mobile evaluates it once, then reuses it for both eyes.
+	using InteractionCallback = std::function<void( const drawInteraction_t & )>;
+	static void GenerateInteractions( const viewLight_t *light, const shaderStage_t *stage,
+		const drawSurf_t *surf, const InteractionCallback &emit );
+
 	void DrawInteractions( const viewDef_t *viewDef, const viewLight_t *vLight, DrawSurfaceList list, const TiledCustomMipmapStage *stencilShadowMipmaps );
 
 private:
@@ -55,7 +61,7 @@ private:
 	void ChooseInteractionProgram( const viewLight_t *vLight, bool translucent, int &lightFlags );
 	void ProcessSingleSurface( const viewLight_t *vLight, const shaderStage_t *lightStage, const drawSurf_t *surf, int lightFlags );
 	void PrepareDrawCommand( drawInteraction_t *inter, int lightFlags );
-	void SetupLightProperties( drawInteraction_t *inter, const viewLight_t *vLight, const shaderStage_t *lightStage, const drawSurf_t *surf );
+	static void SetupLightProperties( drawInteraction_t *inter, const viewLight_t *vLight, const shaderStage_t *lightStage, const drawSurf_t *surf );
 
 	void PreparePoissonSamples();
 };

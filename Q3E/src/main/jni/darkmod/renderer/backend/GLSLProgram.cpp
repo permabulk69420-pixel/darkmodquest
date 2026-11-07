@@ -345,7 +345,11 @@ GLuint GLSLProgram::CompileShader( GLint shaderType, const char *sourceFile, con
     idStr nameStr(sourceFile);
     nameStr.StripPath();
     const bool IsInteractionShader = nameStr.Find("interaction") == 0;
-    if(harm_r_useMediumPrecision.GetBool())
+    // The mobile pipeline uses world-space positions and 32-bit light flags.
+    // Lowering these to mediump breaks depth comparisons and loses flag bits.
+    const bool IsMobileShader = idStr(sourceFile).Find("stages/mobile/") == 0
+        || nameStr == "volumetric.vs" || nameStr == "volumetric_raymarching.fs";
+    if(harm_r_useMediumPrecision.GetBool() && !IsMobileShader)
     {
         if(!IsInteractionShader)
         {

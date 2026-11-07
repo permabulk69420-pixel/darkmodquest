@@ -144,6 +144,10 @@ endif ()
 
 if(ANDROID)
     add_library(TheDarkMod SHARED)
+    # The r23 legacy NDK toolchain can leave RELEASE_INIT without an -O flag
+    # when this project is a subdirectory of Q3E. Do not ship an unoptimized
+    # game/render frontend to Quest. Keep IEEE math (no fast-math) and symbols.
+    target_compile_options(TheDarkMod PRIVATE "$<$<CONFIG:Release>:-O2>")
 else()
 add_executable(TheDarkMod)
 endif()

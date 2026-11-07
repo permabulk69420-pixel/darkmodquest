@@ -19,6 +19,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #include "renderer/tr_local.h"
 #include "renderer/resources/Model_local.h"
 #include "renderer/backend/FrameBufferManager.h"
+#include "renderer/backend/stages/MobileLightingStage.h"
 #include "idlib/JobChunks.h"
 
 #define CHECK_BOUNDS_EPSILON			1.0f
@@ -371,7 +372,7 @@ viewLight_t *R_SetLightDefViewLight( idRenderLightLocal *light ) {
 	if ( !r_shadows.GetInteger() || vLight->noShadows || !shader->LightCastsShadows() )
 		vLight->shadows = LS_NONE;
 	else {
-		if ( r_shadows.GetInteger() == 1 || tooBigForShadowMaps )
+		if ( !R_UseMobileLighting() && ( r_shadows.GetInteger() == 1 || tooBigForShadowMaps ) )
 			vLight->shadows = LS_STENCIL;
 		else
 			vLight->shadows = LS_MAPS;
@@ -380,6 +381,32 @@ viewLight_t *R_SetLightDefViewLight( idRenderLightLocal *light ) {
 	// ideally, we should determine both shadows and volumetric lights without view involved
 	// used in view-independent function idInteraction::CreateInteraction to determine which implementation to generate shadow tris for
 	light->shadows = vLight->shadows;
+
+	// Snapshot directional projection data in the frontend: the render thread
+	// must never read mutable lightDef parameters. Fit along the actual light
+	// direction, rather than projecting from the engine's distant fake origin.
+	vLight->mobileParallel = light->parms.parallel;
+	if ( R_UseMobileLighting() && vLight->mobileParallel ) {
+		idVec3 forward = light->parms.origin - light->globalLightOrigin;
+		forward.Normalize();
+		idVec3 right, up;
+		forward.NormalVectors( right, up );
+		idVec3 axes[3] = { right, up, forward };
+		idBounds bounds;
+		bounds.Clear();
+		for ( int i = 0; i < NUM_FRUSTUM_CORNERS; ++i ) {
+			idVec3 corner( corners.x[i], corners.y[i], corners.z[i] );
+			bounds.AddPoint( idVec3( corner * right, corner * up, corner * forward ) );
+		}
+		memset( vLight->mobileShadowProjection, 0, sizeof(vLight->mobileShadowProjection) );
+		for ( int row = 0; row < 3; ++row ) {
+			float scale = 2.0f / idMath::Fmax( bounds[1][row] - bounds[0][row], 0.01f );
+			for ( int col = 0; col < 3; ++col )
+				vLight->mobileShadowProjection[col * 4 + row] = axes[row][col] * scale;
+			vLight->mobileShadowProjection[12 + row] = -1.0f - bounds[0][row] * scale;
+		}
+		vLight->mobileShadowProjection[15] = 1.0f;
+	}
 
 	// stgatilov #5816: copy volumetric dust settings, resolve noshadows behavior
 	vLight->volumetricDust = light->parms.volumetricDust * r_volumetricDustMultiplier.GetFloat();
@@ -1830,6 +1857,9 @@ R_AssignShadowMapAtlasPages
 =====================
 */
 void R_AssignShadowMapAtlasPages( void ) {
+	// The mobile renderer packs all command-chain views into its own shared
+	// atlas in the backend, before any eye or capture pass begins.
+	if ( R_UseMobileLighting() ) return;
 	// ask how large atlas is
 	int numAtlasTiles, tileSize;
 	frameBuffers->GetShadowMapBudget( numAtlasTiles, tileSize );
