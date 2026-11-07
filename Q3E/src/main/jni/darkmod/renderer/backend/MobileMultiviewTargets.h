@@ -16,6 +16,7 @@ public:
 	void EndFrame();
 	void Shutdown();
 	void SelectEye(int eye);
+	void BindScene();
 	FrameBuffer *Layered() const;
 	GLuint SSAOTexture() const;
 	bool IsPerEyeImage(idImage *image) const;

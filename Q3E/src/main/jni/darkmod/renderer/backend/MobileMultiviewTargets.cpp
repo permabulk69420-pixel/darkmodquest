@@ -178,6 +178,14 @@ void MobileMultiviewTargets::SelectEye(int eye){
 	frameBuffers->primaryFbo=s.primary[eye];frameBuffers->resolveFbo=s.resolve[eye];frameBuffers->guiFbo=s.gui[eye];
 }
 
+void MobileMultiviewTargets::BindScene(){
+	assert(impl->active);
+	// Stages rebind currentRenderFbo on entry. Selecting only the GL binding
+	// would let them switch back to a one-eye layer before a two-view draw.
+	frameBuffers->currentRenderFbo=impl->layered;
+	impl->layered->Bind();
+}
+
 void MobileMultiviewTargets::EndFrame(){
 	auto &s=*impl;if(!s.active)return;SelectEye(0);
 	for(auto &pair:s.images)pair.second.revision=pair.first->contentRevision;

@@ -1115,7 +1115,7 @@ void OpenXRBackend::Impl::ExecuteMultiview(const frameData_t *fd){
 	RB_SetDefaultGLState();if(rawSrgbWrites)qglDisable(0x8DB9);
 	for(int eye=0;eye<2;++eye){select(eye);GL_ViewportRelative(0,0,1,1);GL_ScissorRelative(0,0,1,1);
 		qglClearColor(0,0,0,1);qglClear(GL_COLOR_BUFFER_BIT);}
-	multiview.Layered()->Bind();GL_ViewportRelative(0,0,1,1);GL_ScissorRelative(0,0,1,1);
+	multiview.BindScene();GL_ViewportRelative(0,0,1,1);GL_ScissorRelative(0,0,1,1);
 	qglClearColor(0,0,0,1);qglClear(GL_COLOR_BUFFER_BIT);
 	for(const auto *cmd=fd->cmdHead;cmd;cmd=NextCommand(cmd)){
 		if(cmd->commandId==RC_DRAW_VIEW){
@@ -1131,7 +1131,7 @@ void OpenXRBackend::Impl::ExecuteMultiview(const frameData_t *fd){
 					memcpy(stereo.worldView[eye],view->worldSpace.modelViewMatrix,sizeof(stereo.worldView[eye]));
 					stereo.origin[eye]=view->renderView.vieworg;
 				}
-				multiview.Layered()->Bind();renderBackend->DrawMultiviewDepth(view,eyes[0].background,stereo);
+				multiview.BindScene();renderBackend->DrawMultiviewDepth(view,eyes[0].background,stereo);
 				for(int eye=0;eye<2;++eye){
 					UpdateViewForEye(view,eye,false);select(eye);renderBackend->CaptureDepth(view);
 					if(ambientOcclusion->ShouldEnableForCurrentView()){
@@ -1139,7 +1139,7 @@ void OpenXRBackend::Impl::ExecuteMultiview(const frameData_t *fd){
 					}
 					save(eye);
 				}
-				stereo.ssaoTexture=multiview.SSAOTexture();multiview.Layered()->Bind();
+				stereo.ssaoTexture=multiview.SSAOTexture();multiview.BindScene();
 				QuestCpuScope timing(questRenderCounters.lightingCpuMs,vr_rendererDiagnostics.GetBool());
 				renderBackend->MobileLighting().Draw(view,&stereo);
 			}

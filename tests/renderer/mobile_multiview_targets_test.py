@@ -91,7 +91,7 @@ MANAGER=r'''
 #include "renderer/backend/FrameBuffer.h"
 struct FrameBufferManager{
  int renderWidth=16,renderHeight=16;GLenum colorFormat=GL_RGBA8,depthStencilFormat=GL_DEPTH24_STENCIL8;
- FrameBuffer *primaryFbo=nullptr,*resolveFbo=nullptr,*guiFbo=nullptr;
+ FrameBuffer *primaryFbo=nullptr,*resolveFbo=nullptr,*guiFbo=nullptr,*currentRenderFbo=nullptr;
  std::map<std::string,std::unique_ptr<FrameBuffer>> owned;
  FrameBuffer *CreateFromGenerator(const char *name,FrameBuffer::Generator generator){
   auto &fb=owned[name];if(!fb)fb.reset(new FrameBuffer(generator));else {fb->Destroy();fb->generator=generator;}return fb.get();

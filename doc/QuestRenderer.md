@@ -12,6 +12,14 @@ to select the late OpenXR eye matrices and eye-dependent shading. The command
 loop advances both eyes together rather than replaying the complete scene twice.
 OpenXR still acquires/submits its existing eye swapchains and HUD layer.
 
+Selecting a multiview scene updates both the GL binding and
+`FrameBufferManager::currentRenderFbo`. Lighting stages bind that recorded target
+on entry. Previously, binding only the layered GL FBO left the recorded target on
+the last single-eye layer, so lighting immediately switched to that layer and
+lost the intended stereo output. `MobileMultiviewTargets::BindScene` owns this
+transition for the initial clear, depth and lighting. Selecting an individual eye
+restores that eye's render target before material/effect passes.
+
 This path currently requires MSAA off (0 or 1 sample) and foveation off, matching
 the reported Quest settings. Requested MSAA/foveation, unsupported extensions,
 cutscenes and render-dependent textures used directly in lighting interactions
@@ -216,6 +224,7 @@ python3 tests/renderer/mobile_batch_test.py
 python3 tests/renderer/mobile_submission_test.py
 python3 tests/renderer/mobile_multiview_commands_test.py
 python3 tests/renderer/mobile_multiview_targets_test.py
+python3 tests/renderer/mobile_multiview_pipeline_test.py
 g++ -std=c++14 -O2 -I Q3E/src/main/jni/darkmod tests/renderer/mobile_shadow_cache_test.cpp -o /tmp/quest-cache-test
 /tmp/quest-cache-test
 ```
@@ -232,6 +241,11 @@ FBO state restoration. The command test compiles the actual OpenXR scheduler and
 checks single shared submissions, per-eye captures/backgrounds/effects, a single
 lightgem execution and fallback views. These fixtures do not run the game or the
 Meta compositor and do not measure Quest frame times.
+The pipeline regression also compiles the production lighting-stage entry and
+target implementation against real GLES. It reproduces missing eye lighting with
+the old logical target, then compares the corrected images after layered depth,
+separate-eye depth copies, shared lighting and later single-eye material draws.
+It checks both colour and depth continuity rather than shader programs alone.
 The eleven-frame cached global/local shadow sequence compares every output pixel
 against fresh rendering through movement, disappearance, cutout changes and
 storage invalidation: 49 reference draws become 35, with identical pixels and

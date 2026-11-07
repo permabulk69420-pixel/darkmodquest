@@ -11,7 +11,9 @@ SOURCE=r'''
 #include <cstring>
 #include <cstdio>
 #include <vector>
-struct FrameBuffer{int eye=-1;void Bind(){};};
+struct FrameBuffer{int eye=-1;void Bind();};
+FrameBuffer *boundFramebuffer=nullptr;
+void FrameBuffer::Bind(){boundFramebuffer=this;}
 struct Image{int values[2]={};};
 struct viewDef_t{
  int id=1;bool world=true,eligible=true,outputColorIsBackground=false;
@@ -53,6 +55,7 @@ struct Targets{
  Targets(){layers[0].eye=0;layers[1].eye=1;}
  void SelectEye(int eye){currentEye=eye;frameBuffers->primaryFbo=&layers[eye];}
  FrameBuffer *Layered(){return &layered;}unsigned SSAOTexture(){return 1;}
+ void BindScene(){frameBuffers->currentRenderFbo=&layered;layered.Bind();}
  void EndFrame(){ended=true;}
 };
 struct AO{bool ShouldEnableForCurrentView(){return false;}void ComputeSSAOFromDepth(){}void CopySSAOToLayer(unsigned,int){}}ao,*ambientOcclusion=&ao;
@@ -60,13 +63,20 @@ struct MobileLighting{
  bool HasView(const viewDef_t *view){return view->eligible;}
  bool CanDrawMultiview(const viewDef_t *view,const Targets &){return view->eligible;}
  void Draw(const viewDef_t *,const MobileStereoView *stereo){
+  // The real lighting stage rebinds currentRenderFbo on entry. Its logical
+  // target must therefore be the same two-view FBO selected by the scheduler.
+  frameBuffers->currentRenderFbo->Bind();
+  assert(boundFramebuffer==frameBuffers->currentRenderFbo&&boundFramebuffer->eye==-1);
   assert(stereo->projection[0][0]==10&&stereo->projection[1][0]==11);
   assert(stereo->origin[0].x==0&&stereo->origin[1].x==1);++lightingDraws;
  }
 };
 struct Renderer{
  ::MobileLighting lighting;::MobileLighting &MobileLighting(){return lighting;}
- void DrawMultiviewDepth(const viewDef_t *,bool background,const MobileStereoView &){++depthDraws;backgrounds.push_back(background);}
+ void DrawMultiviewDepth(const viewDef_t *,bool background,const MobileStereoView &){
+  assert(boundFramebuffer==frameBuffers->currentRenderFbo&&boundFramebuffer->eye==-1);
+  ++depthDraws;backgrounds.push_back(background);
+ }
  void CaptureDepth(const viewDef_t *){}
  void DrawView(const viewDef_t *view,bool,bool shared){
   if(!shared){++depthDraws;++lightingDraws;}
