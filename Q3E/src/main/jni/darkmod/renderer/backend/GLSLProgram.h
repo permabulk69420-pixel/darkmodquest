@@ -46,6 +46,7 @@ public:
 	bool Link();
 	bool EnsureLinked();
 	bool IsLinked() const { return linked; }
+	uint64_t Generation() const { return generation; }
 	bool HasFailed() const { return shaderLoadFailed || (program != 0 && !linked); }
 	bool Validate();
 
@@ -81,6 +82,7 @@ private:
 	idStr name;
 	GLuint program;
 	bool linked = false;
+	uint64_t generation = 0;
 	bool shaderLoadFailed = false;
 	Generator generator;
 

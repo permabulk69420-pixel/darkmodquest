@@ -6,8 +6,8 @@
 #     (so ordinary pushes do not spend CI minutes)
 #   - manual "Run workflow" (needs this file to exist on the default branch)
 #
-# Simple phone download: Releases -> Quest 3 - Fog and Diagnostics.
-# APK filename: TDM-Quest3-Fog-and-Diagnostics.apk (also inside the Actions artifact).
+# Simple phone download: Releases -> Quest 3 - Draw Call Reduction.
+# APK filename: TDM-Quest3-Draw-Call-Reduction.apk (also inside the Actions artifact).
 
 name: Android APK - TDM only (arm64)
 
@@ -53,6 +53,9 @@ jobs:
         python3 bin/pack_tdm_shaders.py --check
         python3 tests/renderer/shader_install_test.py
         python3 tests/renderer/fog_policy_test.py
+        python3 tests/renderer/mobile_batch_test.py
+        g++ -std=c++14 -O2 -I Q3E/src/main/jni/darkmod tests/renderer/mobile_shadow_cache_test.cpp -o /tmp/quest-shadow-cache-test
+        /tmp/quest-shadow-cache-test
         chmod +x ./gradlew
         # every game except The Dark Mod is switched off so only TDM's native library is compiled
         OFF="-DGAME_DOOM3=OFF,-DGAME_RTCW=OFF,-DGAME_QUAKE3=OFF,-DGAME_QUAKE2=OFF,-DGAME_QUAKE1=OFF"
@@ -65,13 +68,13 @@ jobs:
     - name: Collect APK
       run: |
         mkdir -p out
-        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest3-Fog-and-Diagnostics.apk"
+        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest3-Draw-Call-Reduction.apk"
         ls -la out
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Quest3-Fog-and-Diagnostics-APK
+        name: Quest3-Draw-Call-Reduction-APK
         path: out/*.apk
         if-no-files-found: error
         retention-days: 30
@@ -81,12 +84,12 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        tag=quest-fog-diagnostics
-        apk=out/TDM-Quest3-Fog-and-Diagnostics.apk
+        tag=quest-draw-call-reduction
+        apk=out/TDM-Quest3-Draw-Call-Reduction.apk
         notes="Latest successful Quest 3 ARM64 build. Source commit: ${GITHUB_SHA} (branch ${GITHUB_REF_NAME}). This download is automatically replaced after the next successful [apk] build."
         if gh release view "$tag" >/dev/null 2>&1; then
           gh release upload "$tag" "$apk" --clobber
-          gh release edit "$tag" --title "Quest 3 - Fog and Diagnostics" --notes "$notes" --latest
+          gh release edit "$tag" --title "Quest 3 - Draw Call Reduction" --notes "$notes" --latest
         else
-          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 - Fog and Diagnostics" --notes "$notes" --latest
+          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 - Draw Call Reduction" --notes "$notes" --latest
         fi

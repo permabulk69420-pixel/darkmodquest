@@ -38,6 +38,7 @@ void GLSLProgram::Regenerate() {
 }
 
 void GLSLProgram::Init() {
+	++generation;
 	if ( program != 0 )
 		Destroy();
 

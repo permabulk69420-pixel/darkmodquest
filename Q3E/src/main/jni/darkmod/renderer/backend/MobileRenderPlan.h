@@ -11,6 +11,12 @@
 // six local cube faces in a 3 x 4 rectangle. Both eyes use exactly these pages.
 // Reduce resolution under pressure; never drop a light or its shadows.
 namespace MobileRenderPlan {
+// A captured camera view can be reused by the second eye only when its pose is
+// independent of the headset and its image copy immediately follows the draw.
+inline bool ReuseCapturedView( bool world, bool subview, bool mirror, bool portalSky,
+	bool followsHead, bool playerView, bool adjacentImageCopy, bool flatFrame ) {
+	return world && subview && !mirror && !portalSky && !followsHead && !playerView && adjacentImageCopy && !flatFrame;
+}
 // Half-open framebuffer pixel coordinates, independent of the combined-view
 // rectangles produced by the frontend before the late OpenXR eye poses.
 struct Rect {

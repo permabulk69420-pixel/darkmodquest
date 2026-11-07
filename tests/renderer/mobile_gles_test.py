@@ -182,7 +182,8 @@ class MobileShaderTests(unittest.TestCase):
         g.uniform(p,'u_shadowFilter',1,'i')
         for name in ('bumpMatrix','diffuseMatrix','specularMatrix'):
             g.uniform(p,'u_'+name+'[0]',[1.,0.,0.,0.]);g.uniform(p,'u_'+name+'[1]',[0.,1.,0.,0.])
-        for i in range(2):
+        for i in range(8):
+            g.uniform(p,f'u_lightTextureSet[{i}]',i%2,'i')
             g.uniform(p,f'u_lightFlags[{i}]',0x100000 if ambient else 0,'i')
             g.uniform(p,f'u_lightOrigin[{i}]',[2.,0.,0.]);g.uniform(p,f'u_shadowParams[{i}]',[0.,0.,0.,0.])
             g.uniform(p,f'u_diffuseColor[{i}]',[0.25,0.25,0.25,1.]);g.uniform(p,f'u_specularColor[{i}]',[0.15,0.15,0.15,1.])
@@ -195,6 +196,108 @@ class MobileShaderTests(unittest.TestCase):
         one=self.setup_forward(light_count=1); two=self.setup_forward(light_count=2)
         self.assertGreater(one[0],10)
         for i in range(3): self.assertAlmostEqual(two[i],2*one[i],delta=2)
+
+    def test_eight_light_batch_matches_eight_draws_with_two_texture_sets(self):
+        g=self.gl;p=self.forward
+        for eye in (-0.03125,0.03125):
+            self.setup_forward(light_count=8,eye=eye)
+            g.texture(4,(230,170,90,255));g.texture(9,(60,150,240,255))
+            def light(slot,i):
+                g.uniform(p,f'u_lightTextureSet[{slot}]',i%2,'i')
+                g.uniform(p,f'u_lightFlags[{slot}]',0x100000 if i%3==0 else 0,'i')
+                g.uniform(p,f'u_lightOrigin[{slot}]',[i*0.25-0.8,0.,0.])
+                g.uniform(p,f'u_diffuseColor[{slot}]',[0.025+i*0.003,0.035,0.02,1.])
+                g.uniform(p,f'u_specularColor[{slot}]',[0.02,0.025,0.03,1.])
+                g.uniform(p,f'u_shadowParams[{slot}]',[0.,0.,0.,0.])
+            for i in range(8):light(i,i)
+            g.call('glDisable',0x0BE2);g.call('glClearColor',0.,0.,0.,0.);g.call('glClear',0x00004000)
+            g.call('glDrawArrays',4,0,6);batch=g.pixels(16,16)
+            g.call('glClear',0x00004000);g.call('glEnable',0x0BE2);g.call('glBlendFunc',1,1)
+            g.uniform(p,'u_lightCount',1,'i')
+            for i in range(8):light(0,i);g.call('glDrawArrays',4,0,6)
+            reference=g.pixels(16,16)
+            self.assertGreater(max(batch[0::4]),5)
+            self.assertLessEqual(max(abs(a-b) for a,b in zip(batch,reference)),4)
+            g.call('glDisable',0x0BE2)
+
+    def test_cached_global_and_local_shadow_depth_matches_fresh_frames(self):
+        # Compile the shipping face cache policy and drive the actual shadow
+        # shaders through cold/warm frames, moving/removing casters, alpha
+        # changes, layout/storage invalidation, and global/local atlas rows.
+        with tempfile.TemporaryDirectory(prefix='quest-shadow-gles-') as directory:
+            cpp=Path(directory)/'cache.cpp';so=Path(directory)/'cache.so'
+            cpp.write_text('''
+#include "renderer/backend/MobileShadowCache.h"
+using namespace MobileShadowCache;
+FaceState state[2];
+Signature key(unsigned long long v){Signature s;s.Add(v);return s;}
+extern "C" int evaluate(int i,unsigned long long st,unsigned long long dy){
+ auto s=key(st),f=s;f.Add(dy);
+ bool dirty=state[i].StaticDirty(s);return (dirty?1:0)|((dirty||state[i].FinalDirty(f))?2:0);
+}
+extern "C" void commit(int i,unsigned long long st,unsigned long long dy){
+ state[i].staticContent=key(st);state[i].finalContent=state[i].staticContent;state[i].finalContent.Add(dy);
+ state[i].haveStatic=state[i].haveFinal=true;
+}
+extern "C" void invalidate(){state[0]={};state[1]={};}
+''')
+            subprocess.run(['g++','-std=c++14','-O2','-shared','-fPIC','-I'+str(ROOT/'Q3E/src/main/jni/darkmod'),str(cpp),'-o',str(so)],check=True)
+            policy=C.CDLL(str(so))
+            for name in ('evaluate','commit'):
+                getattr(policy,name).argtypes=[C.c_int,C.c_ulonglong,C.c_ulonglong]
+            policy.evaluate.restype=C.c_int
+            g=self.gl
+            textures=[g.texture(i+1,depth=True,size=64) for i in range(3)]
+            targets=[g.target(depth_texture=t) for t in textures]
+            for target in targets:
+                g.call('glBindFramebuffer',0x8D40,target);g.call('glDisable',0x0C11)
+                g.call('glDepthMask',1);g.call('glClearDepthf',1.);g.call('glClear',0x00000100)
+            vs='#version 320 es\nprecision highp float;in vec4 attr_Position;out vec2 tc;void main(){gl_Position=vec4(attr_Position.xy,0,1);tc=attr_Position.xy*0.5+0.5;}'
+            fs='#version 320 es\nprecision highp float;uniform highp sampler2D depth;in vec2 tc;out vec4 color;void main(){color=vec4(vec3(texture(depth,tc).r),1);}'
+            sample=g.program(vs,fs)
+            def pixels(texture):
+                g.target(width=64,height=64);g.call('glViewport',0,0,64,64)
+                for flag in (0x0B71,0x0BE2,0x0C11,0x0B44):g.call('glDisable',flag)
+                g.call('glUseProgram',sample);g.call('glActiveTexture',0x84C0+14);g.call('glBindTexture',0x0DE1,texture)
+                g.uniform(sample,'depth',14,'i');g.quad(z=0.,span=1.);g.call('glDrawArrays',4,0,6)
+                return g.pixels(64,64)
+            def prepare(target,face,clear=False):
+                g.call('glBindFramebuffer',0x8D40,target);g.call('glEnable',0x0C11)
+                g.call('glViewport',0,face*32,16,16);g.call('glScissor',0,face*32,16,16)
+                g.call('glEnable',0x0B71);g.call('glDepthFunc',0x0201);g.call('glDepthMask',1)
+                if clear:g.call('glClear',0x00000100)
+                g.call('glUseProgram',self.shadow);g.uniform(self.shadow,'u_parallel',1,'i')
+                g.uniform(self.shadow,'u_shadowProjection',IDENTITY,'m');g.uniform(self.shadow,'u_textureMatrix',IDENTITY,'m')
+            def draw(x,z,span,alpha=255):
+                matrix=IDENTITY.copy();matrix[12]=x
+                g.uniform(self.shadow,'u_modelMatrix',matrix,'m');g.uniform(self.shadow,'u_texture',0,'i')
+                g.uniform(self.shadow,'u_alphaTest',0.5 if alpha<255 else -1.)
+                g.texture(0,(255,255,255,alpha));g.quad(z=z,span=span);g.call('glDrawArrays',4,0,6)
+            frames=[(-0.4,255,0,False),(-0.4,255,0,False),(0.,255,0,False),(0.4,255,0,False),
+                    (None,255,0,False),(None,255,0,False),(None,0,0,False),(0.1,0,0,False),
+                    (0.1,255,1,False),(0.1,255,1,False),(0.1,255,1,True)]
+            cached_draws=reference_draws=0
+            for actor,alpha,revision,invalidate in frames:
+                if invalidate:policy.invalidate()
+                for face in range(2):
+                    st=1+revision*1000+(alpha if face==0 else 0)
+                    dy=0 if actor is None else 100+int((actor+1)*100)
+                    action=policy.evaluate(face,st,dy)
+                    if action&1:
+                        prepare(targets[0],face,True);draw(0.,0.65,0.9);cached_draws+=1
+                        if face==0:draw(-0.4,0.2,0.3,alpha);cached_draws+=1
+                    if action&2:
+                        g.call('glBindFramebuffer',0x8CA8,targets[0]);g.call('glBindFramebuffer',0x8CA9,targets[1]);g.call('glDisable',0x0C11)
+                        y=face*32;g.call('glBlitFramebuffer',0,y,16,y+16,0,y,16,y+16,0x00000100,0x2600)
+                        prepare(targets[1],face)
+                        if actor is not None:draw(actor,-0.2,0.2);cached_draws+=1
+                    policy.commit(face,st,dy)
+                    prepare(targets[2],face,True);draw(0.,0.65,0.9);reference_draws+=1
+                    if face==0:draw(-0.4,0.2,0.3,alpha);reference_draws+=1
+                    if actor is not None:draw(actor,-0.2,0.2);reference_draws+=1
+                self.assertEqual(pixels(textures[1]),pixels(textures[2]),(actor,alpha,revision,invalidate))
+            self.assertLess(cached_draws,reference_draws//2)
+            print(f'Cached-shadow GLES sequence: {reference_draws} reference draws -> {cached_draws} draws, identical pixels')
 
     def test_fog_switch_removes_soft_particle_pixels_but_preserves_smoke(self):
         g = self.gl

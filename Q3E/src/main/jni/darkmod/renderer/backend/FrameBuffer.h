@@ -44,6 +44,7 @@ public:
 	int Width() const { return width; }
 	int Height() const { return height; }
 	int MultiSamples() const { return msaa; }
+	uint64_t Generation() const { return generation; }
 
 	const char *Name() const { return name.c_str(); }
 
@@ -55,6 +56,7 @@ private:
 	idStr name;
 	Generator generator;
 	bool initialized = false;
+	uint64_t generation = 0;
 
 	GLuint fbo = 0;
 	int width = 0;

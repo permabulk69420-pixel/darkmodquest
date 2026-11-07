@@ -1,5 +1,6 @@
 /* The Dark Mod GPL Source Code. See LICENSE.txt for license terms. */
 #pragma once
+#include <chrono>
 
 class idCVar;
 extern idCVar vr_rendererDiagnostics;
@@ -13,8 +14,17 @@ struct QuestRenderCounters {
 	int volumetricLights = 0;
 	int ssaoPasses = 0;
 	int softParticleDraws = 0;
+	double prepareCpuMs = 0, depthCpuMs = 0, lightingCpuMs = 0;
 };
 extern QuestRenderCounters questRenderCounters;
+
+class QuestCpuScope {
+	using Clock = std::chrono::steady_clock;
+	double &total;bool enabled;Clock::time_point start;
+public:
+	QuestCpuScope(double &value,bool measure):total(value),enabled(measure) { if(enabled) start=Clock::now(); }
+	~QuestCpuScope() { if(enabled) total+=std::chrono::duration<double,std::milli>(Clock::now()-start).count(); }
+};
 
 inline const char *QuestScissorStatus( bool enabled, long long fullArea, int checks, int mismatches ) {
 	if ( !enabled ) return "OFF";

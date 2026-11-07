@@ -214,6 +214,7 @@ viewEntity_t *R_SetEntityDefViewEntity( idRenderEntityLocal *def ) {
 	// set the model and modelview matricies
 	vModel = (viewEntity_t *)R_ClearedFrameAlloc( sizeof( *vModel ) );
 	vModel->entityDef = def;
+	vModel->mobileCacheId = uint64_t(reinterpret_cast<uintptr_t>(def));
 
 	// the scissorRect will be expanded as the model bounds is accepted into visible portal chains
 	vModel->scissorRect.Clear();
@@ -305,6 +306,7 @@ viewLight_t *R_SetLightDefViewLight( idRenderLightLocal *light ) {
 	// add to the view light chain
 	vLight = (viewLight_t *)R_ClearedFrameAlloc( sizeof( *vLight ) );
 	vLight->lightDef = light;
+	vLight->mobileCacheId = uint64_t(reinterpret_cast<uintptr_t>(light));
 	vLight->pointLight = light->parms.pointLight;
 	vLight->noShadows = light->parms.noShadows;
 	vLight->noSpecular = light->parms.noSpecular;

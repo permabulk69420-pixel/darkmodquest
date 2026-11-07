@@ -18,6 +18,8 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 
 #include "renderer/tr_local.h"
 
+static std::atomic<uint64_t> nextShadowIndexRevision{1};
+
 /*
 ==============================================================================
 
@@ -602,6 +604,7 @@ R_AllocStaticTriSurfIndexes
 =================
 */
 void R_AllocStaticTriSurfIndexes( srfTriangles_t *tri, int numIndexes ) {
+	tri->shadowIndexRevision = nextShadowIndexRevision.fetch_add(1,std::memory_order_relaxed);
 	assert( tri->indexes == NULL );
 	tri->indexes = triIndexAllocator.Alloc( numIndexes );
 }
@@ -647,6 +650,7 @@ R_ResizeStaticTriSurfIndexes
 =================
 */
 void R_ResizeStaticTriSurfIndexes( srfTriangles_t *tri, int numIndexes ) {
+	tri->shadowIndexRevision = nextShadowIndexRevision.fetch_add(1,std::memory_order_relaxed);
 #ifdef USE_TRI_DATA_ALLOCATOR
 	tri->indexes = triIndexAllocator.Resize( tri->indexes, numIndexes );
 #else
@@ -683,6 +687,7 @@ R_ReferenceStaticTriSurfIndexes
 */
 void R_ReferenceStaticTriSurfIndexes( srfTriangles_t *tri, const srfTriangles_t *reference ) {
 	tri->indexes = reference->indexes;
+	tri->shadowIndexRevision = reference->shadowIndexRevision;
 }
 
 /*

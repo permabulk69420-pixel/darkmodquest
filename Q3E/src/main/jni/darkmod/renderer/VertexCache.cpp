@@ -187,6 +187,7 @@ idVertexCache::Shutdown
 ===========
 */
 void idVertexCache::Shutdown() {
+	staticRevision.fetch_add(1, std::memory_order_relaxed);
 	ClearGeoBufferSet( dynamicData );
 	FreeGeoBufferSet( dynamicData );
 
@@ -327,6 +328,7 @@ idVertexCache::PrepareStaticCacheForUpload
 ==============
 */
 void idVertexCache::PrepareStaticCacheForUpload() {
+	staticRevision.fetch_add(1, std::memory_order_relaxed);
 	vaState.BindVertexBuffer( 0 );
 
 	// upload function to be called twice for vertex and index data

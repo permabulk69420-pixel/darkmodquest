@@ -149,6 +149,7 @@ struct viewLight_s;
 typedef struct drawSurf_s {
 	const srfTriangles_t	*frontendGeo;			// do not use in the backend; may be modified by the frontend
 	idBounds                geometryBounds;             // frame-safe shadow face culling
+	uint64_t                shadowIndexRevision;        // frame-safe logical index identity
 	int						numIndexes;				// these four are frame-safe copies for backend use
 	int						numVerts;
 	vertCacheHandle_t		indexCache;				// int				
@@ -169,6 +170,7 @@ typedef struct drawSurf_s {
 	void CopyGeo( const srfTriangles_t *tri ) {
 		frontendGeo = tri;
 		geometryBounds = tri->bounds;
+		shadowIndexRevision = tri->shadowIndexRevision;
 		numIndexes = tri->numIndexes;
 		numVerts = tri->numVerts;
 		indexCache = tri->indexCache;
@@ -395,6 +397,7 @@ public:
 // a viewLight may exist even without any surfaces, and may be relevent for fogging,
 // but should never exist if its volume does not intersect the view frustum
 typedef struct viewLight_s {
+	uint64_t mobileCacheId;       // frontend snapshot; never dereference lightDef for cache identity
 	struct viewLight_s 		*next;
 
 	// back end should NOT reference the lightDef, because it can change when running SMP
@@ -477,6 +480,7 @@ struct preparedSurf_t {
 // which the front end may be modifying simultaniously if running in SMP mode.
 // A single entityDef can generate multiple viewEntity_t in a single frame, as when seen in a mirror
 typedef struct viewEntity_s {
+	uint64_t mobileCacheId;       // opaque entity identity for shadow invalidation
 	mutable int questFogHidden;	// written by this entity's frontend job only
 	struct viewEntity_s	*next;
 
@@ -721,6 +725,7 @@ typedef struct frameData_s {
 	// VR: if set, the 3D contents of this frame must not be drawn stereoscopically (e.g. scripted camera
 	// views / cutscenes) but flat onto the UI overlay instead. Reset every frame in R_ToggleSmpFrame.
 	bool				render2D;
+	int questGameMsec, questFrontendMsec; // snapshots written by the producer of this command buffer
 } frameData_t;
 
 extern	frameData_t		*frameData;

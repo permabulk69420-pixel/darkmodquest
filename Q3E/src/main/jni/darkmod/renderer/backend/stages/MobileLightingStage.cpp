@@ -2,6 +2,7 @@
 #include "precompiled.h"
 #include "renderer/backend/stages/MobileLightingStage.h"
 #include "renderer/backend/MobileRenderPlan.h"
+#include "renderer/backend/MobileShadowCache.h"
 #include "renderer/backend/stages/InteractionStage.h"
 #include "renderer/backend/stages/AmbientOcclusionStage.h"
 #include "renderer/backend/GLSLProgramManager.h"
@@ -23,7 +24,7 @@ idCVar vr_rendererDiagnostics( "vr_rendererDiagnostics", "0", CVAR_RENDERER | CV
 QuestRenderCounters questRenderCounters;
 
 idCVar r_questRenderer( "r_questRenderer", "1", CVAR_RENDERER | CVAR_BOOL | CVAR_INIT,
-	"Quest forward renderer: shared stereo shadows and two-light surface batches. Set at launch; 0 uses the legacy renderer." );
+	"Quest forward renderer: cached stereo shadows and up to eight lights per surface draw. Set at launch; 0 uses the legacy renderer." );
 idCVar r_questShadowAtlasSize( "r_questShadowAtlasSize", "2048", CVAR_RENDERER | CVAR_INTEGER | CVAR_INIT,
 	"Shared stereo depth atlas size in pixels", 512, 4096 );
 idCVar r_questShadowFaceSize( "r_questShadowFaceSize", "256", CVAR_RENDERER | CVAR_INTEGER | CVAR_INIT,
@@ -32,6 +33,8 @@ idCVar r_questShowRenderStats( "r_questShowRenderStats", "0", CVAR_RENDERER | CV
 	"Log shared shadow draws and two-eye lighting batch counts every 120 frames" );
 idCVar r_questLightScissor( "r_questLightScissor", "1", CVAR_RENDERER | CVAR_BOOL | CVAR_ARCHIVE,
 	"Clip mobile lighting, blend lights and volumetrics to bounds projected for the active eye" );
+idCVar r_questShadowCache( "r_questShadowCache", "1", CVAR_RENDERER | CVAR_BOOL | CVAR_ARCHIVE,
+	"Retain unchanged shadow faces across frames; update changed static and dynamic casters immediately" );
 idCVar vr_fog( "vr_fog", "0", CVAR_RENDERER | CVAR_BOOL | CVAR_ARCHIVE,
 	"Enable atmospheric fog lights, particles and sheets in VR. Off by default. Volumetric lighting is controlled separately." );
 
@@ -79,6 +82,7 @@ MobileRenderPlan::Rect RB_QuestLightScissor( const viewDef_t *view, const viewLi
 
 namespace {
 const int AMBIENT_LIGHT = 0x100000;
+const int MAX_BATCH_LIGHTS = 8;
 
 struct LightingUniforms : GLSLUniformGroup {
 	UNIFORM_GROUP_DEF( LightingUniforms )
@@ -102,6 +106,7 @@ struct LightingUniforms : GLSLUniformGroup {
 	DEFINE_UNIFORM( float, parallaxGrazingAngle )
 	DEFINE_UNIFORM( float, parallaxShadowSoftness )
 	DEFINE_UNIFORM( int, lightFlags )
+	DEFINE_UNIFORM( int, lightTextureSet )
 	DEFINE_UNIFORM( vec3, lightOrigin )
 	DEFINE_UNIFORM( vec4, diffuseColor )
 	DEFINE_UNIFORM( vec4, specularColor )
@@ -145,9 +150,10 @@ struct Packet {
 	const drawSurf_t *geometry;
 	int lightIndex;
 };
-struct Batch { Packet lights[2]; int count = 0; };
+struct Batch { const Packet *lights[MAX_BATCH_LIGHTS] = {}; int count = 0; };
 struct LightClip { const viewLight_t *light; MobileRenderPlan::Rect rect; };
 struct ViewPlan {
+	std::vector<Packet> packets;
 	std::vector<Batch> batches;
 	std::vector<LightClip> lights;
 	MobileRenderPlan::Rect viewport, currentScissor;
@@ -156,6 +162,14 @@ struct Shadow {
 	const viewDef_t *view;
 	const viewLight_t *light;
 	MobileRenderPlan::Page page;
+	uint64_t cacheKey = 0;
+	float maxCoverage = 0.0f;
+	struct Face {
+		std::vector<const drawSurf_t *> statics, dynamics;
+		MobileShadowCache::Signature staticContent, finalContent;
+		bool staticDirty = true, finalDirty = true;
+	};
+	std::array<Face, 12> faces;
 };
 
 bool HasNegativeColor( const Packet &p ) {
@@ -187,6 +201,24 @@ bool Compatible( const Packet &a, const Packet &b ) {
 		memcmp( x.parallaxMatrix, y.parallaxMatrix, sizeof(x.parallaxMatrix) ) == 0 &&
 		( !x.parallaxImage || memcmp( &x.parallax, &y.parallax, sizeof(x.parallax) ) == 0 );
 }
+// Eight lights can share the existing sixteen GLES texture units: reserve two
+// texture tuples, rather than wasting five new units on every light. Projection
+// matrices, colors, shadows and origins remain independent for every light.
+auto LightTextureKey( const Packet &p ) {
+	return std::make_tuple(p.light->lightShader->IsCubicLight(), uintptr_t(p.inter.lightImage),
+		uintptr_t(p.inter.lightFalloffImage), uintptr_t(p.light->lightShader->LightAmbientDiffuse()),
+		uintptr_t(p.light->lightShader->LightAmbientSpecular()));
+}
+bool CanAppend( const Batch &batch, const Packet &p ) {
+	if ( !batch.count ) return true;
+	if ( batch.count == MAX_BATCH_LIGHTS || !Compatible(*batch.lights[0], p) ) return false;
+	const auto first = LightTextureKey(*batch.lights[0]);
+	const auto wanted = LightTextureKey(p);
+	if ( first == wanted ) return true;
+	for ( int i = 1; i < batch.count; ++i )
+		if ( LightTextureKey(*batch.lights[i]) != first ) return LightTextureKey(*batch.lights[i]) == wanted;
+	return true;
+}
 void Bind( int unit, idImage *image ) { GL_SelectTexture( unit ); image->Bind(); }
 }
 
@@ -194,6 +226,19 @@ struct MobileLightingStage::Impl {
 	GLSLProgram *lighting = nullptr, *depth = nullptr;
 	idImageScratch *atlas = nullptr;
 	FrameBuffer *fbo = nullptr;
+	idImageScratch *staticAtlas = nullptr;
+	FrameBuffer *staticFbo = nullptr;
+	MobileShadowCache::AtlasLayout layout;
+	MobileShadowCache::MotionTracker motion;
+	struct CachedLight {
+		MobileRenderPlan::Page page;
+		int columns = 0, rows = 0;
+		std::array<MobileShadowCache::FaceState, 12> faces;
+	};
+	std::map<uint64_t, CachedLight> shadowCache;
+	uint64_t cacheFrame = 0, staticRevision = 0, fboRevision = 0, staticFboRevision = 0;
+	int cachedAtlasSize = 0, cachedFaceSize = 0;
+	int reusedFaces = 0, staticFacesDrawn = 0, compositedFaces = 0, reusedViews = 0;
 	int atlasSize = 0;
 	std::unordered_map<const viewDef_t *, ViewPlan> views;
 	std::unordered_map<const viewLight_t *, size_t> shadowIndex;
@@ -206,6 +251,8 @@ struct MobileLightingStage::Impl {
 	bool checkScissor = false;
 
 	void Collect( const viewDef_t *view );
+	void PlanShadows();
+	bool DescribeCaster( const drawSurf_t *surf, const viewLight_t *light, MobileShadowCache::Signature &content, uint64_t &identity, bool &canCache );
 	void DrawShadows();
 	void DrawCaster( const drawSurf_t *surf, ShadowUniforms *u );
 	void DrawBatch( const viewDef_t *view, ViewPlan &plan, const Batch &batch, LightingUniforms *u );
@@ -225,8 +272,12 @@ void MobileLightingStage::Shutdown() {
 	EndFrame();
 	if ( impl->fbo ) impl->fbo->Destroy();
 	if ( impl->atlas ) impl->atlas->PurgeImage();
+	if ( impl->staticFbo ) impl->staticFbo->Destroy();
+	if ( impl->staticAtlas ) impl->staticAtlas->PurgeImage();
+	impl->shadowCache.clear();impl->layout.Clear();impl->motion.Clear();
 	impl->fbo = nullptr;
 	impl->atlas = nullptr;
+	impl->staticFbo = nullptr;impl->staticAtlas = nullptr;
 }
 void MobileLightingStage::EndFrame() {
 	if ( !impl->views.empty() && impl->eyeDraws > 0 && ++impl->frames % 120 == 0 && r_questShowRenderStats.GetBool() ) {
@@ -259,21 +310,25 @@ void MobileLightingStage::GetDiagnosticsText( char *buffer, int size ) const {
 		"Lighting rectangle area: %.1f%% | culled %d | split %d\n"
 		"Scissor GL samples: %d | mismatches: %d\n"
 		"Shadow builds: %d/frame | shared draws: %d | atlas %d\n"
+		"Shadow cache: %d reused | %d refreshed | %d depth copies\n"
 		"Light packets: %d -> %d batches | stereo draws: %d\n",
 		i.eyePasses, i.lighting && i.lighting->IsLinked() ? "LINKED" : "NOT LINKED",
 		i.depth && i.depth->IsLinked() ? "LINKED" : "NOT LINKED",
 		QuestScissorStatus(R_UseQuestLightScissors(), i.fullPixels, i.scissorChecks, i.scissorMismatches),
 		100.0 * double(i.scissorPixels) / std::max(1.0, double(i.fullPixels)), i.culledBatches, i.splitBatches,
-		i.scissorChecks, i.scissorMismatches, i.shadowBuilds, i.shadowDraws, i.atlasSize,
+		i.scissorChecks, i.scissorMismatches, i.shadowBuilds, i.shadowDraws, i.atlasSize, i.reusedFaces, i.staticFacesDrawn, i.compositedFaces,
 		i.packets, i.batches, i.eyeDraws);
 }
 
 void MobileLightingStage::BeginFrame( const emptyCommand_t *commands ) {
+	QuestCpuScope timing(questRenderCounters.prepareCpuMs,vr_rendererDiagnostics.GetBool());
 	EndFrame();
 	impl->packets = impl->batches = impl->shadowDraws = impl->eyeDraws = 0;
 	impl->culledBatches = impl->splitBatches = 0;
 	impl->scissorPixels = impl->fullPixels = 0;
 	impl->shadowBuilds = impl->eyePasses = impl->scissorChecks = impl->scissorMismatches = 0;
+	impl->reusedFaces = impl->staticFacesDrawn = impl->compositedFaces = impl->reusedViews = 0;
+	++impl->cacheFrame;
 	if ( !R_UseMobileLighting() || r_skipRender.GetBool() ) return;
 	// A missing/failed program must not leave the depth shader active while
 	// replaying lighting draws, which paints black geometry without lighting.
@@ -301,10 +356,19 @@ void MobileLightingStage::BeginFrame( const emptyCommand_t *commands ) {
 	GLint maxSize = 0;
 	qglGetIntegerv( GL_MAX_TEXTURE_SIZE, &maxSize );
 	impl->atlasSize = std::min( maxSize, r_questShadowAtlasSize.GetInteger() );
+	if ( impl->staticRevision != vertexCache.StaticRevision() || impl->cachedAtlasSize != impl->atlasSize ||
+		impl->cachedFaceSize != r_questShadowFaceSize.GetInteger() ) {
+		impl->shadowCache.clear();impl->layout.Clear();impl->motion.Clear();
+		if ( impl->fbo ) impl->fbo->Destroy();
+		if ( impl->staticFbo ) impl->staticFbo->Destroy();
+		impl->staticRevision = vertexCache.StaticRevision();
+		impl->cachedAtlasSize = impl->atlasSize;impl->cachedFaceSize = r_questShadowFaceSize.GetInteger();
+	}
+	impl->PlanShadows();
 	std::vector<int> requested;
 	std::vector<std::pair<int,int>> shapes;
 	for ( const Shadow &s : impl->shadows ) {
-		const float coverage = float(s.light->scissorRect.GetArea()) / std::max(1, s.view->viewport.GetArea());
+		const float coverage = s.maxCoverage;
 		int size = r_questShadowFaceSize.GetInteger();
 		if ( coverage < 0.25f ) size /= 2;
 		if ( coverage < 0.0625f ) size /= 2;
@@ -315,9 +379,17 @@ void MobileLightingStage::BeginFrame( const emptyCommand_t *commands ) {
 	std::vector<MobileRenderPlan::Page> pages;
 	if ( !MobileRenderPlan::Pack( impl->atlasSize, requested, pages, shapes ) )
 		common->Error( "Quest shadow atlas cannot fit %d lights", int(requested.size()) );
+	std::vector<MobileShadowCache::Request> requests;
+	for ( size_t i = 0; i < pages.size(); ++i )
+		requests.push_back({impl->shadows[i].cacheKey, pages[i].size, shapes[i].first, shapes[i].second});
+	bool repacked = false;
+	if ( !impl->layout.Prepare(impl->atlasSize, requests, pages, repacked) ) common->Error("Quest persistent shadow layout failed");
+	if ( repacked ) impl->shadowCache.clear();
+	for ( auto it = impl->shadowCache.begin(); it != impl->shadowCache.end(); )
+		if ( !impl->layout.slots.count(it->first) ) it = impl->shadowCache.erase(it); else ++it;
 	for ( size_t i = 0; i < pages.size(); ++i ) impl->shadows[i].page = pages[i];
 	impl->DrawShadows();
-	impl->shadowBuilds = impl->shadows.empty() ? 0 : 1;
+	impl->shadowBuilds = impl->shadowDraws || impl->compositedFaces ? 1 : 0;
 }
 
 void MobileLightingStage::Impl::Collect( const viewDef_t *view ) {
@@ -380,17 +452,141 @@ void MobileLightingStage::Impl::Collect( const viewDef_t *view ) {
 	}
 	// Reorder only opaque interactions. Translucent material/light order remains
 	// the original additive order (no depth writes); never cross geometry keys.
-	if ( std::none_of(opaque.begin(), opaque.end(), HasNegativeColor) )
+	const bool reorderOpaque = std::none_of(opaque.begin(), opaque.end(), HasNegativeColor);
+	if ( reorderOpaque )
 		std::stable_sort( opaque.begin(), opaque.end(), [](const Packet &a, const Packet &b) { return GeometryKey(a) < GeometryKey(b); } );
-	for ( const auto *list : { &opaque, &translucent } ) {
-		for ( const Packet &p : *list ) {
-			if ( plan.batches.empty() || plan.batches.back().count == 2 || !Compatible(plan.batches.back().lights[0], p) ) plan.batches.push_back({});
-			Batch &b = plan.batches.back();
-			b.lights[b.count++] = p;
+	plan.packets.reserve(opaque.size()+translucent.size());
+	plan.packets.insert(plan.packets.end(),opaque.begin(),opaque.end());
+	plan.packets.insert(plan.packets.end(),translucent.begin(),translucent.end());
+	size_t groupStart = 0;
+	for ( const Packet &p : plan.packets ) {
+			size_t target = plan.batches.size();
+			if ( !p.translucent && reorderOpaque ) {
+				if ( groupStart < plan.batches.size() && GeometryKey(*plan.batches[groupStart].lights[0]) != GeometryKey(p) ) groupStart = plan.batches.size();
+				// Group matching positive material stages even when interleaved
+				// with another stage on the same mesh. Negative stages keep order.
+				for ( size_t i = groupStart; i < plan.batches.size(); ++i )
+					if ( CanAppend(plan.batches[i],p) ) { target = i;break; }
+			} else if ( !plan.batches.empty() && CanAppend(plan.batches.back(),p) ) target = plan.batches.size()-1;
+			if ( target == plan.batches.size() ) plan.batches.push_back({});
+			Batch &b = plan.batches[target];
+			b.lights[b.count++] = &p;
 			++packets;
-		}
 	}
 	batches += int(plan.batches.size());
+}
+
+bool MobileLightingStage::Impl::DescribeCaster( const drawSurf_t *surf, const viewLight_t *light, MobileShadowCache::Signature &content, uint64_t &identity, bool &canCache ) {
+	if ( !surf->numIndexes || !surf->ambientCache.IsValid() || !surf->indexCache.IsValid() ) return false;
+	if ( auto stage = surf->material->GetParallaxStage() ) if ( stage->parallax->offsetExternalShadows ) return false;
+	MobileShadowCache::Signature key;
+	key.Add(surf->space->mobileCacheId);
+	const uintptr_t materialId = reinterpret_cast<uintptr_t>(surf->material);
+	// Track motion by the original vertex allocation/instance/light. A moving
+	// door can rebuild clipped indices every frame; that must change content,
+	// rather than masquerade as a new stationary object on every update.
+	key.Add(materialId);key.Add(surf->ambientCache.offset);key.Add(light->mobileCacheId);key.Add(surf->numVerts);
+	identity = key.a;
+	content = key;
+	content.Add(surf->numIndexes);
+	content.Bytes(surf->space->modelMatrix, sizeof(surf->space->modelMatrix));
+	auto addHandle = [&](const vertCacheHandle_t &h) {
+		content.Add(h.size);content.Add(h.offset);
+		content.Add(uint32_t(h.frameNumber));content.Add(uint32_t(h.isStatic));
+	};
+	addHandle(surf->ambientCache);
+	const bool stableIndices = MobileShadowCache::IndexSignature(content,surf->shadowIndexRevision,surf->indexCache.isStatic,
+		surf->indexCache.offset,surf->indexCache.size,surf->indexCache.frameNumber);
+	canCache = surf->ambientCache.isStatic && stableIndices;
+	const auto coverage = surf->material->Coverage();content.Add(coverage);
+	if ( coverage == MC_PERFORATED ) {
+		extern idCVar r_shadowMapAlphaTested;
+		const bool alpha = r_shadowMapAlphaTested.GetBool();content.Add(alpha);
+		if ( alpha ) {
+			bool attempted = false, visible = false;
+			for ( int i = 0; i < surf->material->GetNumStages(); ++i ) {
+				const shaderStage_t *stage = surf->material->GetStage(i);
+				if ( !stage->hasAlphaTest || !surf->IsStageEnabled(stage) ) continue;
+				attempted = true;
+				if ( surf->GetStageColor(stage)[3] <= 0 ) continue;
+				visible = true;content.Add(i);
+				idImage *image = stage->texture.image;
+				Bind(0,image); // resolve deferred uploads before capturing the image revision
+				const uintptr_t imageId = reinterpret_cast<uintptr_t>(image);
+				content.Add(imageId);content.Add(image->texnum);content.Add(image->contentRevision);
+				const float alphaTest = surf->shaderRegisters[stage->alphaTestRegister];content.Add(alphaTest);
+				float matrix[16];surf->GetTextureMatrix(stage).ToGL(matrix);content.Bytes(matrix,sizeof(matrix));
+				if ( image->GetType() != IT_ASSET || stage->texture.cinematic ) canCache = false;
+			}
+			if ( attempted && !visible ) return false;
+		}
+	}
+	if ( !canCache ) content.Add(cacheFrame); // dynamic buffers/images must never reuse old depth
+	else canCache = motion.Static(identity, content, cacheFrame);
+	return true;
+}
+
+void MobileLightingStage::Impl::PlanShadows() {
+	using MobileShadowCache::Signature;
+	std::map<std::tuple<uint64_t,bool,uint64_t,uint64_t>,size_t> equivalent;
+	std::map<std::pair<uint64_t,bool>,unsigned> ordinals;
+	std::vector<Shadow> unique;
+	shadowIndex.clear();
+	for ( Shadow &s : shadows ) {
+		s.maxCoverage = float(s.light->scissorRect.GetArea()) / std::max(1, s.view->viewport.GetArea());
+		Signature base;
+		base.Add(s.light->mobileCacheId);base.Add(staticRevision);base.Add(depth->Generation());
+		base.Add(s.light->mobileParallel);base.Add(bool(s.light->localShadows));
+		base.Bytes(s.light->globalLightOrigin.ToFloatPtr(),3*sizeof(float));
+		if ( s.light->mobileParallel ) base.Bytes(s.light->mobileShadowProjection,sizeof(s.light->mobileShadowProjection));
+		std::array<MobileShadowCache::CasterSet,12> statics, dynamics;
+		for ( int local = 0; local < 2; ++local ) {
+			const drawSurf_t *first = local ? s.light->localShadows : s.light->globalShadows;
+			std::map<std::pair<uint64_t,uint64_t>,bool> seen;
+			for ( const drawSurf_t *surf = first; surf; surf = surf->nextOnLight ) {
+				Signature content;uint64_t identity;bool canCache;
+				if ( !DescribeCaster(surf,s.light,content,identity,canCache) ) continue;
+				if ( !seen.emplace(std::make_pair(content.a,content.b),true).second ) continue;
+				unsigned mask = 63;
+				if ( !s.light->mobileParallel && !surf->geometryBounds.IsCleared() ) {
+					idVec3 corners[8];surf->geometryBounds.ToPoints(corners);
+					idBounds bounds;bounds.Clear();
+					for ( const auto &corner : corners ) {
+						idVec3 world;R_LocalPointToGlobal(surf->space->modelMatrix,corner,world);
+						bounds.AddPoint(world-s.light->globalLightOrigin);
+					}
+					mask = MobileRenderPlan::CubeFaceMask(bounds[0].ToFloatPtr(),bounds[1].ToFloatPtr());
+				}
+				for ( int face = 0; face < (s.light->mobileParallel ? 1 : 6); ++face ) {
+					if ( !(mask & (1u<<face)) ) continue;
+					const int index = local*6+face;
+					if ( canCache ) { s.faces[index].statics.push_back(surf);statics[index].Add(content); }
+					else { s.faces[index].dynamics.push_back(surf);dynamics[index].Add(content); }
+				}
+			}
+		}
+		Signature complete = base;
+		for ( int i = 0; i < 12; ++i ) {
+			s.faces[i].staticContent = statics[i].Finish(base);
+			s.faces[i].finalContent = dynamics[i].Finish(s.faces[i].staticContent);
+			complete.Add(s.faces[i].finalContent.a);complete.Add(s.faces[i].finalContent.b);
+		}
+		const bool lightgem = s.view->IsLightGem();
+		const auto equivalenceKey = std::make_tuple(s.light->mobileCacheId,lightgem,complete.a,complete.b);
+		auto found = equivalent.find(equivalenceKey);
+		if ( found != equivalent.end() ) {
+			shadowIndex[s.light] = found->second;
+			unique[found->second].maxCoverage = std::max(unique[found->second].maxCoverage,s.maxCoverage);
+			++reusedViews;continue;
+		}
+		Signature owner;owner.Add(s.light->mobileCacheId);owner.Add(lightgem);
+		owner.Add(ordinals[{s.light->mobileCacheId,lightgem}]++);
+		s.cacheKey = owner.a;
+		shadowIndex[s.light] = unique.size();equivalent.emplace(equivalenceKey,unique.size());
+		unique.push_back(std::move(s));
+	}
+	shadows.swap(unique);
+	if ( cacheFrame % 120 == 0 ) motion.Prune(cacheFrame);
 }
 
 void MobileLightingStage::Impl::DrawCaster( const drawSurf_t *surf, ShadowUniforms *u ) {
@@ -429,6 +625,7 @@ void MobileLightingStage::Impl::DrawShadows() {
 	FrameBuffer *savedDraw = frameBuffers->activeDrawFbo;
 	const viewDef_t *savedView = backEnd.viewDef;
 	if ( !atlas ) atlas = globalImages->ImageScratch("_questShadowAtlas");
+	if ( !staticAtlas ) staticAtlas = globalImages->ImageScratch("_questStaticShadowAtlas");
 	if ( !fbo ) {
 		fbo = frameBuffers->CreateFromGenerator( "questSharedShadowDepth", [this](FrameBuffer *fb) {
 			fb->Init( atlasSize, atlasSize );
@@ -439,7 +636,19 @@ void MobileLightingStage::Impl::DrawShadows() {
 			qglReadBuffer(GL_NONE);
 		} );
 	}
+	if ( !staticFbo ) {
+		staticFbo = frameBuffers->CreateFromGenerator("questStaticShadowDepth",[this](FrameBuffer *fb) {
+			fb->Init(atlasSize,atlasSize);
+			staticAtlas->GenerateAttachment(atlasSize,atlasSize,GL_DEPTH_COMPONENT24,GL_NEAREST);
+			fb->AddDepthRenderTexture(staticAtlas);
+			GLenum none = GL_NONE;qglDrawBuffers(1,&none);qglReadBuffer(GL_NONE);
+		});
+	}
 	fbo->Bind();
+	staticFbo->Bind();
+	if ( fboRevision != fbo->Generation() || staticFboRevision != staticFbo->Generation() ) {
+		shadowCache.clear();fboRevision = fbo->Generation();staticFboRevision = staticFbo->Generation();
+	}
 	GL_State( GLS_DEPTHFUNC_LESS | GLS_REDMASK | GLS_GREENMASK | GLS_BLUEMASK | GLS_ALPHAMASK );
 	qglDisable( GL_STENCIL_TEST );
 	qglEnable( GL_SCISSOR_TEST );
@@ -455,42 +664,63 @@ void MobileLightingStage::Impl::DrawShadows() {
 	depth->Activate();
 	auto u = depth->GetUniformGroup<ShadowUniforms>();
 	u->texture.Set(0);
-	for ( const Shadow &s : shadows ) {
-		backEnd.viewDef = s.view;
-		GL_Cull(CT_TWO_SIDED);
+	Bind(0,globalImages->whiteImage);
+	auto forFaces = [&](auto &&function) {
+		for ( Shadow &s : shadows )
+			for ( int local = 0; local < (s.light->localShadows ? 2 : 1); ++local )
+				for ( int face = 0; face < (s.light->mobileParallel ? 1 : 6); ++face ) function(s,local,face);
+	};
+	auto rectangle = [](const Shadow &s,int local,int face) {
 		const auto &p = s.page;
-		qglScissor(p.x, p.y, (s.light->mobileParallel ? 1 : 3)*p.size, (s.light->localShadows ? 4 : 2)*p.size);
-		qglClear(GL_DEPTH_BUFFER_BIT);
-		u->lightOrigin.Set(s.light->globalLightOrigin);
-		u->parallel.Set(s.light->mobileParallel);
+		const int x = p.x + (face%3)*p.size,y = p.y + (face/3+2*local)*p.size;
+		return MobileRenderPlan::Rect{x,y,x+p.size,y+p.size};
+	};
+	auto prepareDraw = [&](const Shadow &s,int local,int face) {
+		backEnd.viewDef = s.view;GL_Cull(CT_TWO_SIDED);
+		u->lightOrigin.Set(s.light->globalLightOrigin);u->parallel.Set(s.light->mobileParallel);
 		if ( s.light->mobileParallel ) u->shadowProjection.Set(s.light->mobileShadowProjection);
-		for ( int local = 0; local < 2; ++local ) {
-			const drawSurf_t *first = local ? s.light->localShadows : s.light->globalShadows;
-			if ( !first ) continue;
-			std::vector<std::pair<const drawSurf_t *, unsigned>> casters;
-			for ( const drawSurf_t *surf = first; surf; surf = surf->nextOnLight ) {
-				unsigned faces = 63;
-				if ( !s.light->mobileParallel && !surf->geometryBounds.IsCleared() ) {
-					idVec3 corners[8]; surf->geometryBounds.ToPoints(corners);
-					idBounds bounds; bounds.Clear();
-					for ( const idVec3 &corner : corners ) {
-						idVec3 world; R_LocalPointToGlobal(surf->space->modelMatrix, corner, world);
-						bounds.AddPoint(world - s.light->globalLightOrigin);
-					}
-					faces = MobileRenderPlan::CubeFaceMask(bounds[0].ToFloatPtr(), bounds[1].ToFloatPtr());
-				}
-				casters.emplace_back(surf, faces);
-			}
-			for ( int face = 0; face < (s.light->mobileParallel ? 1 : 6); ++face ) {
-				u->face.Set(face);
-				int x = p.x + (face % 3)*p.size, y = p.y + (face / 3 + 2*local)*p.size;
-				qglViewport(x, y, p.size, p.size);
-				qglScissor(x, y, p.size, p.size);
-				for ( const auto &caster : casters )
-					if ( caster.second & (1u << face) ) DrawCaster(caster.first, u);
-			}
-		}
+		u->face.Set(face);
+		const auto rect = rectangle(s,local,face);
+		qglViewport(rect.x1,rect.y1,s.page.size,s.page.size);
+		qglScissor(rect.x1,rect.y1,s.page.size,s.page.size);
+	};
+	for ( Shadow &s : shadows ) {
+		auto &cached = shadowCache[s.cacheKey];
+		const int columns = s.light->mobileParallel ? 1 : 3,rows = s.light->localShadows ? 4 : 2;
+		if ( cached.page.x != s.page.x || cached.page.y != s.page.y || cached.page.size != s.page.size ||
+			cached.columns != columns || cached.rows != rows ) cached = {};
+		cached.page = s.page;cached.columns = columns;cached.rows = rows;
 	}
+	// Phase 1: refresh changed static faces together, retaining all other depth.
+	forFaces([&](Shadow &s,int local,int face) {
+		const int i = local*6+face;auto &job = s.faces[i];auto &cached = shadowCache[s.cacheKey].faces[i];
+		job.staticDirty = !r_questShadowCache.GetBool() || cached.StaticDirty(job.staticContent);
+		job.finalDirty = job.staticDirty || !r_questShadowCache.GetBool() || cached.FinalDirty(job.finalContent);
+		if ( !job.finalDirty ) ++reusedFaces;
+		if ( !job.staticDirty ) return;
+		prepareDraw(s,local,face);qglClear(GL_DEPTH_BUFFER_BIT);
+		for ( const drawSurf_t *surf : job.statics ) DrawCaster(surf,u);
+		cached.staticContent = job.staticContent;cached.haveStatic = true;++staticFacesDrawn;
+	});
+	// Phase 2: restore the static depth underneath changed dynamic casters in one
+	// batch of GPU depth copies. No readback and no redraw of unchanged scenery.
+	staticFbo->Bind();fbo->BindDraw();qglDisable(GL_SCISSOR_TEST);
+	forFaces([&](Shadow &s,int local,int face) {
+		if ( !s.faces[local*6+face].finalDirty ) return;
+		const auto r = rectangle(s,local,face);
+		qglBlitFramebuffer(r.x1,r.y1,r.x2,r.y2,r.x1,r.y1,r.x2,r.y2,GL_DEPTH_BUFFER_BIT,GL_NEAREST);
+		++compositedFaces;
+	});
+	// Phase 3: add only changed dynamic depth. A moving actor never erases the
+	// cached scenery, and a disappearing actor restores exactly the static face.
+	fbo->Bind();qglEnable(GL_SCISSOR_TEST);
+	forFaces([&](Shadow &s,int local,int face) {
+		const int i = local*6+face;auto &job = s.faces[i];
+		if ( !job.finalDirty ) return;
+		prepareDraw(s,local,face);
+		for ( const drawSurf_t *surf : job.dynamics ) DrawCaster(surf,u);
+		auto &cached = shadowCache[s.cacheKey].faces[i];cached.finalContent = job.finalContent;cached.haveFinal = true;
+	});
 	GLSLProgram::Deactivate();
 	backEnd.viewDef = savedView;
 	savedRead->Bind(); savedDraw->BindDraw();
@@ -527,26 +757,27 @@ void MobileLightingStage::BindShadowTexture( int unit ) {
 }
 
 void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, ViewPlan &plan, const Batch &batch, LightingUniforms *u ) {
-	const Packet *visible[2];
+	const Packet *visible[MAX_BATCH_LIGHTS];
 	int count = 0;
 	MobileRenderPlan::Rect rect;
 	for ( int i = 0; i < batch.count; ++i ) {
-		const Packet &p = batch.lights[i];
+		const Packet &p = *batch.lights[i];
 		const auto &r = plan.lights[p.lightIndex].rect;
 		if ( r.Empty() ) continue;
 		visible[count++] = &p;
 		rect.Add(r);
 	}
 	if ( count == 0 ) { fullPixels += plan.viewport.Area(); ++culledBatches; return; }
-	if ( count == 2 && rect.Area() > plan.lights[visible[0]->lightIndex].rect.Area() +
-		plan.lights[visible[1]->lightIndex].rect.Area() ) {
+	long long individualArea = 0;
+	for ( int i = 0; i < count; ++i ) individualArea += plan.lights[visible[i]->lightIndex].rect.Area();
+	if ( count > 1 && rect.Area() > 2*individualArea ) {
 		// A large empty gap makes a fused draw more expensive than two tight
 		// light draws. Retain batching for overlapping lights, not distant ones.
 		++splitBatches;
 		Batch single;
 		single.count = 1;
-		for ( int i = 0; i < 2; ++i ) {
-			single.lights[0] = *visible[i];
+		for ( int i = 0; i < count; ++i ) {
+			single.lights[0] = visible[i];
 			DrawBatch(view, plan, single, u);
 		}
 		return;
@@ -596,9 +827,12 @@ void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, ViewPlan &plan
 		(inter.surf->dsFlags & DSF_BLOCK_SELF_SHADOWS) ? 0 : inter.parallax.shadowSteps);
 	Bind(0, inter.bumpImage); Bind(1, inter.diffuseImage); Bind(2, inter.specularImage);
 	Bind(3, inter.parallaxImage ? inter.parallaxImage : globalImages->blackImage);
-	idVec3 origins[2]; idVec4 diffuse[2], specular[2], pages[2], params[2], tex[4];
-	float projections[32] = {}, shadowProjections[32] = {};
-	int lightFlags[2] = {};
+	idVec3 origins[MAX_BATCH_LIGHTS];
+	idVec4 diffuse[MAX_BATCH_LIGHTS], specular[MAX_BATCH_LIGHTS], pages[MAX_BATCH_LIGHTS], params[MAX_BATCH_LIGHTS], tex[2*MAX_BATCH_LIGHTS];
+	float projections[16*MAX_BATCH_LIGHTS] = {}, shadowProjections[16*MAX_BATCH_LIGHTS] = {};
+	int lightFlags[MAX_BATCH_LIGHTS] = {}, textureSets[MAX_BATCH_LIGHTS] = {};
+	const Packet *texturePackets[2] = {};
+	int textureCount = 0;
 	for ( int i = 0; i < count; ++i ) {
 		const Packet &p = *visible[i]; const auto &d = p.inter; const auto *l = p.light;
 		origins[i] = l->globalLightOrigin; diffuse[i] = d.diffuseColor; specular[i] = d.specularColor;
@@ -614,7 +848,13 @@ void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, ViewPlan &plan
 		ShadowInfo(l, p.local, pages[i], params[i], shadowProjections+i*16);
 		extern idCVar r_shadowMapOnTranslucent;
 		if ( p.translucent && !r_shadowMapOnTranslucent.GetBool() ) params[i].w = 0;
-		const int base = 4 + 5*i;
+		int textureSet = 0;
+		while ( textureSet < textureCount && LightTextureKey(*texturePackets[textureSet]) != LightTextureKey(p) ) ++textureSet;
+		textureSets[i] = textureSet;
+		if ( textureSet < textureCount ) continue;
+		assert(textureSet < 2);
+		texturePackets[textureCount++] = &p;
+		const int base = 4 + 5*textureSet;
 		// Samplers of different types always have distinct units, even if the
 		// inactive branch won't sample one of them (GLES program validation).
 		Bind(base, l->lightShader->IsCubicLight() ? globalImages->whiteImage : d.lightImage);
@@ -623,7 +863,7 @@ void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, ViewPlan &plan
 		Bind(base+3, ambientDiffuse ? ambientDiffuse : globalImages->whiteCubeMapImage);
 		Bind(base+4, ambientSpecular ? ambientSpecular : globalImages->blackCubeMapImage);
 	}
-	if ( count == 1 ) {
+	if ( textureCount == 1 ) {
 		// GLES considers every active sampler, even in a uniform-disabled branch.
 		// Never inherit incomplete textures or a render target from an earlier
 		// pass in the unused second light slot.
@@ -634,6 +874,7 @@ void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, ViewPlan &plan
 		Bind(13, globalImages->blackCubeMapImage);
 	}
 	u->lightCount.Set(count);
+	u->lightTextureSet.SetArray(count, textureSets);
 	u->lightFlags.SetArray(count, lightFlags);
 	u->lightOrigin.SetArray(count, origins[0].ToFloatPtr());
 	u->diffuseColor.SetArray(count, diffuse[0].ToFloatPtr());

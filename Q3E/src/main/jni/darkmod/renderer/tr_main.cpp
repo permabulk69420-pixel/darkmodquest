@@ -240,6 +240,7 @@ void R_ToggleSmpFrame( void ) {
 	frameData->frameMemoryAllocated = bytesNeededForAlignment;
 	frameData->frameMemoryUsed = 0;
 	frameData->render2D = false;
+	frameData->questGameMsec = frameData->questFrontendMsec = 0;
 
 	R_ClearCommandChain( frameData );
 }

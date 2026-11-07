@@ -250,6 +250,7 @@ public:
 	// data commonly accessed is grouped here
 	static const int TEXTURE_NOT_LOADED = -1;
 	GLuint				texnum;					// gl texture binding, will be TEXTURE_NOT_LOADED if not loaded
+	uint64_t            contentRevision = 1;       // invalidates alpha-tested shadow caches on reload
 	textureType_t		type;
 	int					frameUsed;				// for texture usage in frame statistics
 	int					bindCount;				// incremented each bind

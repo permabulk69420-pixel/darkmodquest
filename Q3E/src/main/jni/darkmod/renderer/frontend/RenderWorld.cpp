@@ -948,6 +948,7 @@ void idRenderWorldLocal::RenderScene( const renderView_t &renderView ) {
 	int endTime = Sys_Milliseconds();
 
 	tr.pc.frontEndMsec += endTime - startTime;
+	frameData->questFrontendMsec += endTime - startTime;
 
 	// prepare for any 2D drawing after this
 	//tr.guiModel->Clear();

@@ -3005,6 +3005,7 @@ void idSessionLocal::RunGameTic(int timestepMs, bool minorTic) {
 	gameReturn_t	ret = game->RunFrame( &cmd, timestepMs, minorTic );
 	int end = Sys_Milliseconds();
 	time_gameFrame += end - start;	// note time used for com_speeds
+	if ( frameData ) frameData->questGameMsec += end - start;
 
 	// check for constency failure from a recorded command
 	if ( cmdDemoFile ) {

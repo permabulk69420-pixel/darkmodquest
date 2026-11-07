@@ -1447,6 +1447,7 @@ PurgeImage
 ===============
 */
 void idImage::PurgeImage() {
+	++contentRevision;
 	if ( texnum != TEXTURE_NOT_LOADED ) {
 		// sometimes is NULL when exiting with an error
 		if ( qglDeleteTextures ) {

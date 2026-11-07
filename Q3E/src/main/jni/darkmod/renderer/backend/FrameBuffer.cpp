@@ -38,6 +38,7 @@ void FrameBuffer::SetGenerator( const Generator &generator ) {
 }
 
 void FrameBuffer::Init( int width, int height, int msaa ) {
+	++generation;
 	if (initialized) {
 		common->Warning("Trying to initialize already created framebuffer %s", name.c_str());
 		return;

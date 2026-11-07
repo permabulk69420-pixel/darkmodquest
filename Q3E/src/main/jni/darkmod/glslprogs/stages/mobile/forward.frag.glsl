@@ -20,11 +20,11 @@ uniform mat4 u_modelMatrix;
 uniform vec3 u_viewOrigin;
 uniform vec4 u_clipPlane;
 uniform vec2 u_renderResolution, u_ambientParams;
-uniform int u_flags, u_lightCount, u_lightFlags[2], u_shadowFilter;
-uniform vec3 u_lightOrigin[2];
-uniform vec4 u_diffuseColor[2], u_specularColor[2];
-uniform mat4 u_lightProjection[2], u_shadowProjection[2];
-uniform vec4 u_lightTextureMatrix[4], u_shadowPage[2], u_shadowParams[2];
+uniform int u_flags, u_lightCount, u_lightFlags[8], u_lightTextureSet[8], u_shadowFilter;
+uniform vec3 u_lightOrigin[8];
+uniform vec4 u_diffuseColor[8], u_specularColor[8];
+uniform mat4 u_lightProjection[8], u_shadowProjection[8];
+uniform vec4 u_lightTextureMatrix[16], u_shadowPage[8], u_shadowParams[8];
 uniform vec4 u_bumpMatrix[2], u_diffuseMatrix[2], u_specularMatrix[2];
 uniform vec2 u_parallaxHeightScale;
 uniform ivec3 u_parallaxIterations;
@@ -82,16 +82,21 @@ void main() {
         sTC += transformSurfaceTexOffset(offset.xy, true, u_specularMatrix);
         scaledOffset = scaleTexcoordOffsetToModelSpace(offset, texCoord, positionModel, tangentToModel);
     }
-    // Material fetches (and parallax tracing) happen once for both lights.
+    // Material fetches and parallax tracing happen once for up to eight lights.
     vec4 normalTexel = textureGrad(u_normalTexture, nTC, dFdx(texNormal), dFdy(texNormal));
     vec4 diffuseTexel = textureGrad(u_diffuseTexture, dTC, dFdx(texDiffuse), dFdy(texDiffuse));
     vec4 specularTexel = textureGrad(u_specularTexture, sTC, dFdx(texSpecular), dFdy(texSpecular));
     vec3 normal = unpackSurfaceNormal(normalTexel, true, checkFlag(u_flags, SFL_SURFACE_NORMAL_TEXTURE_RGTC));
-    fragColor = illuminate(0, u_projection0, u_cube0, u_falloff0, u_ambientDiffuse0, u_ambientSpecular0,
-                           diffuseTexel, specularTexel, normal, offset, scaledOffset);
-    // Constant sampler indices are required by GLES. A second bounded light
-    // halves material fetches/draw submission on surfaces with overlapping lights.
-    if (u_lightCount == 2)
-        fragColor += illuminate(1, u_projection1, u_cube1, u_falloff1, u_ambientDiffuse1, u_ambientSpecular1,
-                                diffuseTexel, specularTexel, normal, offset, scaledOffset);
+    fragColor = vec4(0.0);
+    // The sampler bindings stay constant, as GLES requires. Compatible lights
+    // share two texture tuples; all per-light transforms and colors are unique.
+    for (int i = 0; i < 8; ++i) {
+        if (i >= u_lightCount) break;
+        if (u_lightTextureSet[i] == 0)
+            fragColor += illuminate(i, u_projection0, u_cube0, u_falloff0, u_ambientDiffuse0, u_ambientSpecular0,
+                                    diffuseTexel, specularTexel, normal, offset, scaledOffset);
+        else
+            fragColor += illuminate(i, u_projection1, u_cube1, u_falloff1, u_ambientDiffuse1, u_ambientSpecular1,
+                                    diffuseTexel, specularTexel, normal, offset, scaledOffset);
+    }
 }

@@ -207,6 +207,7 @@ public:
 	}
 	// called when xrWaitFrame returned; waitMs is how long it blocked
 	void OnFrameStart( double waitMs ) {
+		lastWaitMs = waitMs;
 		const Clock::time_point now = Clock::now();
 		if ( haveLastFrame ) {
 			const double interval = Ms( now - lastFrame );
@@ -249,6 +250,7 @@ public:
 		idStr::Copynz( buffer, text, size );
 		return true;
 	}
+	double WaitMs() const { return lastWaitMs; } // render thread only
 	// called after the frame was submitted; cpuMs is the time spent in the stereo rendering code
 	void OnFrameEnd( double cpuMs, int eyeW, int eyeH ) {
 		sumCpu += cpuMs;
@@ -327,6 +329,7 @@ private:
 	Clock::time_point lastFrame, lastReport;
 	int frames = 0, gpuSamples = 0;
 	double sumInterval = 0, maxInterval = 0, sumWait = 0, sumCpu = 0, maxCpu = 0, sumGpu = 0, maxGpu = 0;
+	double lastWaitMs = 0;
 };
 
 /*
@@ -383,6 +386,7 @@ struct OpenXRBackend::Impl {
 	char diagnosticsText[4096] = {};
 	unsigned diagnosticsFrame = 0;
 	void UpdateDiagnostics( const frameData_t *fd );
+	std::vector<const emptyCommand_t *> reusedCameraCommands;
 	OpenXRInput input;
 	std::mutex inputMutex;
 	vrControllerState_t controllerState;	// polled once per frame by the render thread, read by the game thread
@@ -1141,6 +1145,10 @@ void OpenXRBackend::Impl::ExecutePass( const frameData_t *fd, Pass pass, FrameBu
 	bool outputColorIsBackground = false;
 
 	for ( const emptyCommand_t *cmds = fd->cmdHead; cmds; cmds = NextCommand( cmds ) ) {
+		if ( pass == PASS_RIGHT && std::find(reusedCameraCommands.begin(),reusedCameraCommands.end(),cmds) != reusedCameraCommands.end() ) {
+			if ( cmds->commandId == RC_DRAW_VIEW ) outputColorIsBackground = ((const drawSurfsCommand_t *)cmds)->viewDef->outputColorIsBackground;
+			continue;
+		}
 		switch ( cmds->commandId ) {
 		case RC_NOP:
 			break;
@@ -1221,6 +1229,24 @@ void OpenXRBackend::Impl::RenderFrame( const frameData_t *fd ) {
 	const std::chrono::steady_clock::time_point cpuStart = std::chrono::steady_clock::now();
 	bool rendered = false;
 	const bool hasWorldView = FrameHasWorldView( fd ) && !fd->render2D;
+	reusedCameraCommands.clear();
+	for ( const emptyCommand_t *cmd = fd->cmdHead; cmd; cmd = NextCommand(cmd) ) {
+		if ( cmd->commandId != RC_DRAW_VIEW ) continue;
+		const auto *view = ((const drawSurfsCommand_t *)cmd)->viewDef;
+		const emptyCommand_t *copy = NextCommand(cmd);
+		const copyRenderCommand_t *capture = copy && copy->commandId == RC_COPY_RENDER ? (const copyRenderCommand_t *)copy : nullptr;
+		bool uniqueImageCopy = capture && capture->image && !capture->buffer && !capture->usePBO;
+		if ( uniqueImageCopy ) {
+			for ( const emptyCommand_t *other = fd->cmdHead; other; other = NextCommand(other) ) {
+				if ( other == copy || other->commandId != RC_COPY_RENDER ) continue;
+				if ( ((const copyRenderCommand_t *)other)->image == capture->image ) { uniqueImageCopy = false;break; }
+			}
+		}
+		if ( MobileRenderPlan::ReuseCapturedView(IsWorldView(view),view->isSubview,view->isMirrorGen,view->isPortalSky,
+			view->renderView.followsHead,view->renderView.viewID == VID_PLAYER_VIEW,uniqueImageCopy,fd->render2D) ) {
+			reusedCameraCommands.push_back(cmd);reusedCameraCommands.push_back(copy);
+		}
+	}
 
 	if ( shouldRender && haveRenderViews &&
 		 eyeSwapchains[0].Acquire() && eyeSwapchains[1].Acquire() && uiSwapchain.Acquire() ) {
@@ -1323,13 +1349,17 @@ void OpenXRBackend::Impl::UpdateDiagnostics( const frameData_t *fd ) {
 	int linked, failed, unused;
 	idStr firstFailure;
 	programManager->GetStatus(linked, failed, unused, firstFailure);
-	int hidden = 0;
+	int hidden = 0, mainViews = 0, skyViews = 0, mirrorViews = 0, otherViews = 0;
 	std::vector<const viewDef_t *> observed;
 	for ( const emptyCommand_t *cmd = fd->cmdHead; cmd; cmd = NextCommand(cmd) ) {
 		if ( cmd->commandId != RC_DRAW_VIEW ) continue;
 		const viewDef_t *view = ((const drawSurfsCommand_t *)cmd)->viewDef;
 		if ( !view || !view->viewEntitys || view->IsLightGem() || std::find(observed.begin(), observed.end(), view) != observed.end() ) continue;
 		observed.push_back(view);
+		if ( view->isPortalSky ) ++skyViews;
+		else if ( view->isMirrorGen ) ++mirrorViews;
+		else if ( !view->isSubview && view->renderView.viewID == VID_PLAYER_VIEW ) ++mainViews;
+		else ++otherViews;
 		for ( const viewEntity_t *entity = view->viewEntitys; entity; entity = entity->next ) hidden += entity->questFogHidden;
 	}
 	const QuestRenderCounters &c = questRenderCounters;
@@ -1343,6 +1373,9 @@ void OpenXRBackend::Impl::UpdateDiagnostics( const frameData_t *fd ) {
 		"RENDERER DIAGNOSTICS | last completed frame %u\n"
 		"OpenXR ACTIVE | stereo 2 eyes | %dx%d | %.1f Hz\n"
 		"%s\n%s"
+		"CPU ms: game %d | frontend %d | XR wait %.1f | SMP %s\n"
+		"Render CPU ms: prep %.1f | depth %.1f | light %.1f\n"
+		"Views: main %d sky %d mirror %d other %d | camera reuse %d\n"
 		"Shaders: %d linked | %d FAILED | %d unused\n"
 		"Shader failure: %.54s\n"
 		"Fog/mist: %s | hidden surfaces/stages: %d\n"
@@ -1354,7 +1387,10 @@ void OpenXRBackend::Impl::UpdateDiagnostics( const frameData_t *fd ) {
 		"Shadows setting: %s | soft filter: %s\n"
 		"MSAA samples: %d (requested %d) | HDR buffer: %d-bit\n",
 		++diagnosticsFrame, eyeWidth, eyeHeight, displayPeriod > 0 ? 1e9 / double(displayPeriod) : 0.0,
-		timing, mobile, linked, failed, unused, firstFailure.IsEmpty() ? "none" : firstFailure.c_str(),
+		timing, mobile,
+		fd->questGameMsec, fd->questFrontendMsec, timer.WaitMs(), com_smp.GetBool() ? "ON" : "OFF",
+		c.prepareCpuMs, c.depthCpuMs, c.lightingCpuMs, mainViews, skyViews, mirrorViews, otherViews, int(reusedCameraCommands.size()/2),
+		linked, failed, unused, firstFailure.IsEmpty() ? "none" : firstFailure.c_str(),
 		!fog ? (fogDraws ? "FAIL: unexpected draws" : "OFF") : fogDraws ? "ACTIVE" : "IDLE: no fog draws",
 		hidden, c.fogSurfaceDraws, c.fogLightPasses, c.blendFogPasses,
 		!volumes ? "OFF" : c.volumetricLights ? "ACTIVE" : "ON, idle in this view", c.volumetricLights,

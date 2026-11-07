@@ -17,6 +17,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #define __VERTEXCACHE_H__
 
 #include "renderer/backend/GpuBuffer.h"
+#include <atomic>
 
 // vertex cache calls should only be made by the front end
 
@@ -67,6 +68,7 @@ public:
 	// called when vertex programs are enabled or disabled, because
 	// the cached data is no longer valid
 	void			PurgeAll();
+	uint64_t StaticRevision() const { return staticRevision.load(std::memory_order_relaxed); }
 
 	// will be an int offset cast to a pointer of ARB_vertex_buffer_object
 	void			VertexPosition( vertCacheHandle_t handle, attribBind_t attrib = attribBind_t::ATTRIB_REGULAR );
@@ -117,6 +119,7 @@ public:
 	drawSurf_t		screenRectSurf;
 
 private:
+	std::atomic<uint64_t> staticRevision{1};
 
 	int				currentFrame;			// for purgable block tracking
 	int				basePointer;

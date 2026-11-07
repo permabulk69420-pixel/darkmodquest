@@ -98,6 +98,7 @@ typedef struct srfTriangles_s {
 	idBounds					bounds;					// for culling
 
 	int							ambientViewCount;		// if == tr.viewCount, it is visible this view
+	uint64_t                    shadowIndexRevision;    // immutable index-array allocation identity
 
 	bool						generateNormals;		// create normals from geometry, instead of using explicit ones
 	bool						tangentsCalculated;		// set when the vertex tangents have been calculated

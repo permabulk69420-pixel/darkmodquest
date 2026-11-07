@@ -17,6 +17,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #pragma hdrstop
 
 #include "renderer/backend/RenderBackend.h"
+#include "renderer/QuestRenderDiagnostics.h"
 
 #include "renderer/backend/stages/AmbientOcclusionStage.h"
 #include "renderer/backend/GLSLProgram.h"
@@ -121,10 +122,14 @@ void RenderBackend::DrawView( const viewDef_t *viewDef, bool colorIsBackground )
 	// if we are just doing 2D rendering, no need to fill the depth buffer
 	if ( viewDef->viewEntitys ) {
 		// fill the depth buffer and clear color buffer to black except on subviews
-		depthStage.DrawDepth( viewDef, drawSurfs, numDrawSurfs );
+		{
+			QuestCpuScope timing(questRenderCounters.depthCpuMs,vr_rendererDiagnostics.GetBool());
+			depthStage.DrawDepth( viewDef, drawSurfs, numDrawSurfs );
+		}
 		if( ambientOcclusion->ShouldEnableForCurrentView() ) {
 			ambientOcclusion->ComputeSSAOFromDepth();
 		}
+		QuestCpuScope timing(questRenderCounters.lightingCpuMs,vr_rendererDiagnostics.GetBool());
 		if ( mobileLightingStage.HasView(viewDef) ) {
 			mobileLightingStage.Draw(viewDef);
 		} else {
