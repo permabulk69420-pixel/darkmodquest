@@ -1,7 +1,7 @@
 # Quest 3 GLES renderer
 
 The `ccr-f26da023-1l9zer` OpenXR integration remains responsible for tracking,
-late eye poses, controllers, swapchains, foveation, the HUD overlay, and frame
+late eye poses, controllers, swapchains, the HUD overlay, and frame
 submission. When OpenXR is active, `r_questRenderer` defaults to the new mobile
 lighting pipeline. Flat rendering continues to use the existing backend.
 
@@ -18,7 +18,7 @@ at those declarations; passing a dictionary entry alone does not define it.
 Earlier APKs omitted these declarations, linked ordinary one-eye shaders and
 then attempted two-eye matrix uploads. Shader-link success and the submitted
 multiview draw count could therefore accompany missing geometry and lighting.
-The installed shader version is now 10, forcing replacement of older sources.
+The installed shader version is now 11, forcing replacement of older sources.
 Before selecting the multiview path, the renderer verifies second-eye modelview,
 projection and lighting-origin uniform locations for every program. Incompatible
 programs retain separate-eye rendering. Checks are cached by shader generation
@@ -32,8 +32,8 @@ lost the intended stereo output. `MobileMultiviewTargets::BindScene` owns this
 transition for the initial clear, depth and lighting. Selecting an individual eye
 restores that eye's render target before material/effect passes.
 
-This path currently requires MSAA off (0 or 1 sample) and foveation off, matching
-the reported Quest settings. Requested MSAA/foveation, unsupported extensions,
+This path requires MSAA off (0 or 1 sample). Foveation can remain enabled with
+multiview. Requested MSAA, unsupported multiview extensions,
 cutscenes and render-dependent textures used directly in lighting interactions
 retain the existing rendering path. The existing diagnostics pipeline row shows
 actual multiview versus separate-eye lighting passes; a setting alone does not
@@ -43,6 +43,53 @@ resizing and retirement invalidate that storage. SSAO remains computed per eye,
 then copied into matching array layers for multiview lighting. Ordinary material,
 refraction, fog, volumetric and post-processing passes retain eye-specific draws;
 this does not claim every rendering pass has been converted to multiview.
+
+## Fixed foveation
+
+The launcher's **Foveated lighting** levels now use hardware variable-rate
+shading (VRS), without changing eye-buffer resolution, depth/stencil sampling,
+shadow resolution or UI detail. Off remains the default; Medium is the starting
+point for comparison. It no longer disables multiview.
+
+On drivers exposing `GL_EXT_fragment_shading_rate` and its attachment extension,
+lighting uses an immutable R8UI spatial rate map. Each tile takes the finest rate
+required by either eye's optical centre, derived from the late asymmetric eye
+projections. Coordinates include the framebuffer viewport offset. Map generation
+is cached by dimensions, viewport, level, sample count and projection centres.
+Supported rates are queried for the active sample count. Low requests 1x2 outside
+the protected centre; Medium requests 2x2; High permits 4x2 at the outer corners.
+Unsupported rates retain a finer supported rate. Depth/stencil coverage and tests
+remain per pixel. Map binding/combining is limited to the main lighting pass.
+
+On Quest drivers exposing only `GL_QCOM_shading_rate`, a conservative draw-rate
+path uses the intersection of projected geometry bounds and existing light
+scissors. Any rectangle touching either eye's protected centre stays at 1x1.
+Bounds are cached per geometry for each view replay. This adds no draws, texture
+fetches or shader branches. Wide surfaces crossing the centre retain full rate,
+so savings are more limited than a spatial map and depend on the scene. The
+driver may choose a finer effective rate than requested. Mirror, camera, portal
+sky, lightgem, shadow, material/effect and UI passes retain full-rate shading.
+The controller resets the hardware rate and detaches maps before leaving lighting.
+
+This replaces the old `GL_QCOM_texture_foveated` path completely. That extension
+scales depth/stencil along with colour and warns that resolved depth can cause
+artifacts when reused. This renderer copies depth and switches targets between
+depth, lighting and per-eye effects; simply foveating the primary colour texture
+therefore cannot guarantee consistent depth across passes. Its old incomplete-FBO
+fallback also tried to clear an irreversible foveation-enable texture bit. The
+new path uses ordinary colour/depth targets throughout; unsupported hardware or
+rejected rate maps retain full-rate rendering. This addresses those failure
+mechanisms; it does not establish the exact cause of every reported black bar.
+
+The existing foveation diagnostics row reports OFF, UNAVAILABLE, SPATIAL VRS,
+DRAW VRS or idle, with map passes and actual coarse-rate draw requests. These
+are renderer/API activity counts, not measurements of GPU fragment invocations.
+`mobile_foveation_test.py` compiles the production controller with recorded
+vendor entry points and real GLES target/map allocation. It checks both-eye
+centre protection, offsets, map encoding, capability rejection, renderer restart
+and GL state restoration. Mesa multiview image tests cover the unchanged depth,
+lighting and material handoff. Qualcomm hardware rate selection, visual quality
+and frame-rate gains still require a Quest run.
 
 ## Frame work
 

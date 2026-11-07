@@ -31,6 +31,31 @@ struct Rect {
 	}
 };
 
+// Conservative fixed foveation. Any draw/tile touching either eye's fovea stays
+// at full rate. Distance uses the closest point, never the rectangle's centre,
+// so a large wall/ground surface cannot coarsen the centre of the image.
+// 0=1x1, 1=1x2, 2=2x2, 3=4x2 fragment shading; depth stays per pixel.
+inline int FoveationDensity(const Rect &bounds,const Rect &viewport,
+	const float centres[2][2],int level) {
+	if(level<=0||level>3||bounds.Empty()||viewport.Empty())return 0;
+	double distance=std::numeric_limits<double>::infinity();
+	for(int eye=0;eye<2;++eye) {
+		const double cx=centres[eye][0],cy=centres[eye][1];
+		if(!std::isfinite(cx)||!std::isfinite(cy))return 0;
+		const double x1=2.0*(bounds.x1-viewport.x1)/(viewport.x2-viewport.x1)-1.0;
+		const double x2=2.0*(bounds.x2-viewport.x1)/(viewport.x2-viewport.x1)-1.0;
+		const double y1=2.0*(bounds.y1-viewport.y1)/(viewport.y2-viewport.y1)-1.0;
+		const double y2=2.0*(bounds.y2-viewport.y1)/(viewport.y2-viewport.y1)-1.0;
+		const double dx=std::max(0.0,std::max(x1-cx,cx-x2));
+		const double dy=std::max(0.0,std::max(y1-cy,cy-y2));
+		distance=std::min(distance,dx*dx+dy*dy);
+	}
+	const double radius=level==1?0.75:level==2?0.60:0.50;
+	if(distance<=radius*radius)return 0;
+	if(level==1)return 1;
+	return level==3&&distance>1.0?3:2;
+}
+
 // Project a world AABB with the active eye's matrices. Clip edges against the
 // near plane before dividing by W: simply dropping behind-eye corners clips
 // visible lights as the head moves through them. Outward pixel rounding and a

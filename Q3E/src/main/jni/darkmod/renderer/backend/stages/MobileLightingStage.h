@@ -29,6 +29,7 @@ public:
 	bool HasFrame() const;
 	bool PrepareMultiview();
 	void GetDiagnosticsText( char *buffer, int size ) const; // render thread only
+	void GetFoveationDiagnostics(char *buffer,int size) const;
 	void Draw( const viewDef_t *view, const struct MobileStereoView *stereo = nullptr );
 	// Volumetric lights sample the same shared depth as opaque/translucent
 	// surfaces, so there is no second shadow renderer or unshadowed light leak.

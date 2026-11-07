@@ -3,7 +3,7 @@
 <resources>
     <string name="vr_settings_title" translatable="false">The Dark Mod VR (Quest)</string>
     <string name="vr_resolution_scale_label" translatable="false">Resolution (100% = what the headset recommends)</string>
-    <string name="vr_foveation_label" translatable="false">Foveated rendering (less detail towards the edges, faster)</string>
+    <string name="vr_foveation_label" translatable="false">Foveated lighting (less detail at the edges, faster)</string>
     <string name="vr_refresh_rate_label" translatable="false">Display refresh rate</string>
     <string name="vr_srgb_label" translatable="false">sRGB colour format (try it if the colours look wrong)</string>
     <string name="vr_show_perf_label" translatable="false">Show performance info on the HUD (fps, CPU and GPU time per frame)</string>

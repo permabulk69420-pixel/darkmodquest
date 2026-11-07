@@ -1,4 +1,7 @@
 #pragma tdm_define "QUEST_MULTIVIEW"
+#ifdef GL_EXT_fragment_shading_rate
+#extension GL_EXT_fragment_shading_rate : enable
+#endif
 precision highp float;
 precision highp int;
 // Lighting never writes depth or stencil. Reject hidden fragments before

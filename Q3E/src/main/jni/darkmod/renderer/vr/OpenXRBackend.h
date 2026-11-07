@@ -64,15 +64,9 @@ public:
 	// Returns false if there is no valid head pose.
 	bool GetHeadOrientation( idQuat &orientation ) const;
 
-	// Fixed foveated rendering (vr_foveation): the buffer the scene is drawn into has to be a texture that the GPU
-	// can foveate. Returns nullptr when foveation is not used; then the engine uses its normal buffer.
 	// Frame timing for the on-screen display (vr_showPerf): false if it is switched off or there is nothing to show yet
 	bool GetPerfText( char *buffer, int size ) const;
 	bool GetRendererDiagnosticsText( char *buffer, int size ) const;
-
-	idImage *CreateFoveatedColorImage( int width, int height );
-	// to be called with that buffer's framebuffer bound; switches foveation off again if the GPU does not accept it
-	void CheckFoveatedFramebuffer();
 
 	// Reads the current state of the controllers. Returns false if input is not available.
 	bool PollControllers( vrControllerState_t &state );

@@ -20,7 +20,9 @@ from shader_install_test import method
 
 STAGE_FIXTURES=r'''
 #define TRACE_GL_SCOPE(...)
-struct viewDef_t{TestScissor scissor;bool IsLightGem()const{return false;}};
+const int VID_PLAYER_VIEW=1;
+struct viewDef_t{TestScissor scissor;float projectionMatrix[16]={};bool isSubview=false,isPortalSky=false;
+ struct{int viewID=VID_PLAYER_VIEW;}renderView;bool IsLightGem()const{return false;}};
 struct MobileStereoView{float projection[2][16]={},worldView[2][16]={};GLuint ssaoTexture=0;};
 namespace MobileRenderPlan{
 struct Rect{int x1=0,y1=0,x2=0,y2=0;void Add(const Rect &r){*this=r;}};
@@ -29,7 +31,8 @@ Rect ProjectScissor(const float *,const float *,const float *,const float *,cons
 struct Vec{float v[3]={};const float *ToFloatPtr()const{return v;}};
 struct Tri{Vec bounds[2];};struct Light{Tri *frustumTris=nullptr;};
 struct LightClip{Light *light;MobileRenderPlan::Rect rect;};struct Batch{};
-struct ViewPlan{MobileRenderPlan::Rect viewport,currentScissor;std::vector<LightClip>lights;std::vector<Batch>batches;};
+struct ViewPlan{MobileRenderPlan::Rect viewport,currentScissor;std::vector<LightClip>lights;std::vector<Batch>batches;std::map<int,int>foveationBounds;};
+struct Foveation{void BeginLighting(const MobileRenderPlan::Rect &,const float *,const float *,int,bool){}void EndLighting(){}};
 static idCVar vr_rendererDiagnostics("diagnostics","0");
 bool R_UseQuestLightScissors(){return true;}
 MobileRenderPlan::Rect RB_QuestViewViewport(const viewDef_t *){return {0,0,16,16};}
@@ -41,6 +44,7 @@ struct GLSLProgram{static void Deactivate(){glUseProgram(0);}};
 class MobileLightingStage{
 public:
  struct Impl{
+  Foveation foveation;
   std::map<const viewDef_t *,ViewPlan>views;const MobileStereoView *stereo=nullptr;
   bool checkScissor=false;int eyePasses=0,multiviewPasses=0;uint64_t drawSerial=0;GLuint program;
   void DrawBatch(const viewDef_t *,ViewPlan &,const Batch &){

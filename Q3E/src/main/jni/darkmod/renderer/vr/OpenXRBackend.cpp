@@ -66,9 +66,6 @@ idCVar vr_resolutionScale( "vr_resolutionScale", "1.0", CVAR_RENDERER | CVAR_FLO
 idCVar vr_srgbSwapchain( "vr_srgbSwapchain", "0", CVAR_RENDERER | CVAR_INTEGER,
 	"1 = give the headset an sRGB image format and store the engine's (already display-encoded) colours in it unchanged, 0 = plain RGBA8 format (default). "
 	"Try 0 and 1 if the colours look washed out or too dark (takes effect on restart, not saved: set it on the command line)", 0, 1 );
-idCVar vr_foveation( "vr_foveation", "0", CVAR_RENDERER | CVAR_INTEGER,
-	"Fixed foveated rendering: the scene is drawn at full detail in the middle of each eye and with less detail towards the edges, "
-	"which makes it cheaper. 0 = off (default), 1 = low, 2 = medium, 3 = high (the most savings). Takes effect on restart, not saved: set it on the command line", 0, 3 );
 idCVar vr_showPerf( "vr_showPerf", "0", CVAR_RENDERER | CVAR_BOOL,
 	"Show the frame rate and the CPU and GPU time per frame on the HUD screen (not saved: set it in the launcher)" );
 idCVar vr_displayRefreshRate( "vr_displayRefreshRate", "0", CVAR_RENDERER | CVAR_INTEGER,
@@ -96,40 +93,6 @@ inline idQuat AverageOrientation( const idQuat &a, idQuat b ) {
 inline const emptyCommand_t *NextCommand( const emptyCommand_t *cmd ) {
 	return static_cast<const emptyCommand_t *>( cmd->next );
 }
-
-// the texture the scene is drawn into when foveation is used; owned by the VR backend
-class FoveatedColorImage : public idImage {
-public:
-	FoveatedColorImage( GLuint glTexture, int w, int h ) {
-		texnum = glTexture;
-		uploadWidth = w;
-		uploadHeight = h;
-		imgName = "xr foveated scene";
-	}
-	virtual void PurgeImage() override {
-		texnum = TEXTURE_NOT_LOADED;
-	}
-};
-
-// GL_QCOM_texture_foveated
-#ifndef GL_TEXTURE_FOVEATED_FEATURE_BITS_QCOM
-#define GL_TEXTURE_FOVEATED_FEATURE_BITS_QCOM 0x8BFB
-#define GL_TEXTURE_FOVEATED_MIN_PIXEL_DENSITY_QCOM 0x8BFC
-#define GL_FOVEATION_ENABLE_BIT_QCOM 0x00000001
-#endif
-
-// how strongly the detail falls off towards the edge of the eye image, for vr_foveation 1..3
-struct FoveationLevel {
-	float gain;			// how fast the detail drops with the distance from the middle
-	float area;			// size of the middle part that is drawn at full detail
-	float minDensity;	// share of the pixels that is still drawn at the very edge
-};
-const FoveationLevel FOVEATION_LEVELS[4] = {
-	{ 0.0f, 0.0f, 1.0f },
-	{ 2.0f, 0.6f, 0.50f },
-	{ 3.0f, 0.4f, 0.33f },
-	{ 4.0f, 0.2f, 0.25f },
-};
 
 const int UI_WIDTH = 1920;
 const int UI_HEIGHT = 1440;	// 4:3, like the 640x480 virtual screen of the GUIs
@@ -356,13 +319,6 @@ struct OpenXRBackend::Impl {
 	XrSessionState sessionState = XR_SESSION_STATE_UNKNOWN;
 
 	int64_t swapchainFormat = 0;
-	// fixed foveated rendering
-	GLuint foveatedTexture = 0;
-	FoveatedColorImage *foveatedImage = nullptr;
-	bool foveationActive = false;
-	void ( *textureFoveationParameters )( GLuint, GLuint, GLuint, GLfloat, GLfloat, GLfloat, GLfloat, GLfloat ) = nullptr;
-	void ApplyFoveation( int eye );
-	void DestroyFoveatedImage();
 
 	bool rawSrgbWrites = false;		// swapchain is sRGB but the engine's colours must be stored as they are
 	int eyeWidth = 0;
@@ -694,7 +650,6 @@ bool OpenXRBackend::Impl::Initialize() {
 void OpenXRBackend::Impl::Shutdown() {
 	multiview.Shutdown();
 	timer.Shutdown();
-	DestroyFoveatedImage();
 	input.Destroy();
 	eyeSwapchains[0].Destroy();
 	eyeSwapchains[1].Destroy();
@@ -1220,7 +1175,6 @@ void OpenXRBackend::Impl::ExecutePass( const frameData_t *fd, Pass pass, FrameBu
 
 	if ( isEye ) {
 		UpdateViewsForEye( fd->cmdHead, pass );
-		ApplyFoveation( pass );
 	}
 
 	// true: views are drawn into the primary framebuffer (which can be multisampled)
@@ -1343,7 +1297,7 @@ void OpenXRBackend::Impl::RenderFrame( const frameData_t *fd ) {
 			// depth and material/light packets are independent of the late eye
 			// pose: build once, before either eye starts its tile render pass.
 			renderBackend->PrepareStereoFrame( fd->cmdHead );
-			if(hasWorldView&&R_UseMobileLighting()&&vr_foveation.GetInteger()==0&&r_multiSamples.GetInteger()<=1&&
+			if(hasWorldView&&R_UseMobileLighting()&&r_multiSamples.GetInteger()<=1&&
 				renderBackend->PrepareMultiview()&&multiview.BeginFrame(fd->cmdHead)){
 				reusedCameraCommands.clear();
 				ExecuteMultiview(fd);
@@ -1399,33 +1353,6 @@ void OpenXRBackend::Impl::RenderFrame( const frameData_t *fd ) {
 	EndFrame( rendered, hasWorldView );
 }
 
-/*
-=============================================================================================
-Fixed foveated rendering (GL_QCOM_texture_foveated)
-=============================================================================================
-*/
-void OpenXRBackend::Impl::DestroyFoveatedImage() {
-	if ( foveatedTexture ) {
-		qglDeleteTextures( 1, &foveatedTexture );
-		foveatedTexture = 0;
-	}
-	delete foveatedImage;
-	foveatedImage = nullptr;
-}
-
-// centre of the foveated area: the point of the eye image the lens looks straight at
-void OpenXRBackend::Impl::ApplyFoveation( int eye ) {
-	if ( !foveationActive || !foveatedTexture || !textureFoveationParameters || !haveRenderViews ) {
-		return;
-	}
-	const XrFovf &fov = renderViews[eye].fov;
-	const float l = tanf( fov.angleLeft ), r = tanf( fov.angleRight ), u = tanf( fov.angleUp ), d = tanf( fov.angleDown );
-	const float focalX = -( r + l ) / ( r - l );
-	const float focalY = -( u + d ) / ( u - d );
-	const FoveationLevel &level = FOVEATION_LEVELS[idMath::ClampInt( 0, 3, vr_foveation.GetInteger() )];
-	textureFoveationParameters( foveatedTexture, 0, 0, focalX, focalY, level.gain, level.gain, level.area );
-}
-
 bool OpenXRBackend::GetPerfText( char *buffer, int size ) const {
 	if ( !impl->initialized || !vr_showPerf.GetBool() ) {
 		return false;
@@ -1457,8 +1384,8 @@ void OpenXRBackend::Impl::UpdateDiagnostics( const frameData_t *fd ) {
 	const int fogDraws = c.fogSurfaceDraws + c.fogLightPasses + c.blendFogPasses;
 	const bool fog = cvarSystem->GetCVarBool("vr_fog");
 	const bool volumes = cvarSystem->GetCVarBool("r_volumetricEnable");
-	const bool usingFoveation = foveationActive && foveatedTexture && r_multiSamples.GetInteger() <= 1;
-	const char *foveation = vr_foveation.GetInteger() <= 0 ? "OFF" : usingFoveation ? "ACCEPTED" : "UNAVAILABLE";
+	char foveation[200];
+	renderBackend->MobileLighting().GetFoveationDiagnostics(foveation,sizeof(foveation));
 	char text[4096];
 	snprintf(text, sizeof(text),
 		"RENDERER DIAGNOSTICS | last completed frame %u\n"
@@ -1474,7 +1401,7 @@ void OpenXRBackend::Impl::UpdateDiagnostics( const frameData_t *fd ) {
 		"Volumetric lighting: %s | light passes: %d\n"
 		"SSAO setting: %s | passes: %d\n"
 		"Soft particles setting: %s | draws: %d\n"
-		"Foveation: %s (requested level %d)\n"
+		"%s"
 		"Shadows setting: %s | soft filter: %s\n"
 		"MSAA samples: %d (requested %d) | HDR buffer: %d-bit\n",
 		++diagnosticsFrame, eyeWidth, eyeHeight, displayPeriod > 0 ? 1e9 / double(displayPeriod) : 0.0,
@@ -1487,7 +1414,7 @@ void OpenXRBackend::Impl::UpdateDiagnostics( const frameData_t *fd ) {
 		!volumes ? "OFF" : c.volumetricLights ? "ACTIVE" : "ON, idle in this view", c.volumetricLights,
 		cvarSystem->GetCVarBool("r_ssao") ? "ON" : "OFF", c.ssaoPasses,
 		r_useSoftParticles.GetBool() ? "ON" : "OFF", c.softParticleDraws,
-		foveation, vr_foveation.GetInteger(), r_shadows.GetBool() ? "ON" : "OFF",
+		foveation, r_shadows.GetBool() ? "ON" : "OFF",
 		r_softShadowsQuality.GetBool() ? "ON" : "OFF",
 		frameBuffers->primaryFbo ? frameBuffers->primaryFbo->MultiSamples() : 0,
 		r_multiSamples.GetInteger(), r_fboColorBits.GetInteger());
@@ -1501,68 +1428,6 @@ bool OpenXRBackend::GetRendererDiagnosticsText( char *buffer, int size ) const {
 	idStr::Copynz(buffer, impl->diagnosticsText[0] ? impl->diagnosticsText :
 		"RENDERER DIAGNOSTICS\nWaiting for a completed stereo frame", size);
 	return true;
-}
-
-idImage *OpenXRBackend::CreateFoveatedColorImage( int width, int height ) {
-	Impl &i = *impl;
-	if ( !i.initialized || vr_foveation.GetInteger() <= 0 ) {
-		return nullptr;
-	}
-	if ( r_multiSamples.GetInteger() > 1 ) {
-		XR_Log( "vr_foveation: not available together with multisampling (r_multiSamples), using the normal scene buffer" );
-		return nullptr;
-	}
-	const char *extensions = (const char *)qglGetString( GL_EXTENSIONS );
-	if ( !extensions || !strstr( extensions, "GL_QCOM_texture_foveated" ) ) {
-		XR_Log( "vr_foveation: the GPU does not offer GL_QCOM_texture_foveated, using the normal scene buffer" );
-		return nullptr;
-	}
-	i.textureFoveationParameters = ( void ( * )( GLuint, GLuint, GLuint, GLfloat, GLfloat, GLfloat, GLfloat, GLfloat ) )eglGetProcAddress( "glTextureFoveationParametersQCOM" );
-	if ( !i.textureFoveationParameters ) {
-		XR_Log( "vr_foveation: glTextureFoveationParametersQCOM is missing, using the normal scene buffer" );
-		return nullptr;
-	}
-
-	i.DestroyFoveatedImage();
-	const FoveationLevel &level = FOVEATION_LEVELS[idMath::ClampInt( 0, 3, vr_foveation.GetInteger() )];
-
-	qglGenTextures( 1, &i.foveatedTexture );
-	// binding a texture behind the engine's back: keep its idea of the bound texture correct
-	const int tmu = backEnd.glState.currenttmu;
-	qglBindTexture( GL_TEXTURE_2D, i.foveatedTexture );
-	qglTexStorage2D( GL_TEXTURE_2D, 1, GL_RGBA8, width, height );
-	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
-	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
-	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
-	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
-	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_FOVEATED_FEATURE_BITS_QCOM, GL_FOVEATION_ENABLE_BIT_QCOM );
-	qglTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_FOVEATED_MIN_PIXEL_DENSITY_QCOM, level.minDensity );
-	qglBindTexture( GL_TEXTURE_2D, 0 );
-	backEnd.glState.tmu[tmu].current2DMap = -1;
-
-	i.foveatedImage = new FoveatedColorImage( i.foveatedTexture, width, height );
-	i.foveationActive = true;
-	XR_Log( "vr_foveation %d: scene buffer %dx%d is foveated (gain %.1f, full detail area %.1f, lowest density %.2f)",
-		vr_foveation.GetInteger(), width, height, level.gain, level.area, level.minDensity );
-	return i.foveatedImage;
-}
-
-void OpenXRBackend::CheckFoveatedFramebuffer() {
-	Impl &i = *impl;
-	if ( !i.foveationActive ) {
-		return;
-	}
-	const GLenum status = qglCheckFramebufferStatus( GL_FRAMEBUFFER );
-	if ( status == GL_FRAMEBUFFER_COMPLETE ) {
-		return;
-	}
-	XR_Log( "vr_foveation: the scene buffer is not accepted with foveation (framebuffer status 0x%x), foveation is switched off", (unsigned)status );
-	const int tmu = backEnd.glState.currenttmu;
-	qglBindTexture( GL_TEXTURE_2D, i.foveatedTexture );
-	qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_FOVEATED_FEATURE_BITS_QCOM, 0 );
-	qglBindTexture( GL_TEXTURE_2D, 0 );
-	backEnd.glState.tmu[tmu].current2DMap = -1;
-	i.foveationActive = false;
 }
 
 /*
@@ -1722,9 +1587,7 @@ void OpenXRBackend::AdjustRenderView( struct renderView_s * ) {}
 void OpenXRBackend::RenderStereoView( const struct frameData_s * ) {}
 bool OpenXRBackend::GetHeadOrientation( idQuat & ) const { return false; }
 bool OpenXRBackend::PollControllers( vrControllerState_t &state ) { memset( &state, 0, sizeof( state ) ); return false; }
-idImage *OpenXRBackend::CreateFoveatedColorImage( int, int ) { return nullptr; }
 bool OpenXRBackend::GetPerfText( char *, int ) const { return false; }
 bool OpenXRBackend::GetRendererDiagnosticsText( char *, int ) const { return false; }
-void OpenXRBackend::CheckFoveatedFramebuffer() {}
 
 #endif // TDM_VR_OPENXR

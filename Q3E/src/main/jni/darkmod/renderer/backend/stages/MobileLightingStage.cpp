@@ -10,6 +10,7 @@
 #include "renderer/backend/MobileUniform.h"
 #include "renderer/backend/MobileStereoView.h"
 #include "renderer/backend/MobileMultiviewTargets.h"
+#include "renderer/backend/MobileFoveation.h"
 #include "renderer/backend/FrameBufferManager.h"
 #include "renderer/backend/FrameBuffer.h"
 #include "renderer/vr/OpenXRBackend.h"
@@ -161,6 +162,7 @@ struct ViewPlan {
 	std::vector<Batch> batches;
 	std::vector<LightClip> lights;
 	MobileRenderPlan::Rect viewport, currentScissor;
+	std::unordered_map<const drawSurf_t *,MobileRenderPlan::Rect> foveationBounds;
 };
 struct Shadow {
 	const viewDef_t *view;
@@ -226,6 +228,7 @@ void Bind( int unit, idImage *image ) { image->BindToUnit(unit); }
 }
 
 struct MobileLightingStage::Impl {
+	MobileFoveation foveation;
 	GLSLProgram *lighting[8] = {}, *depth = nullptr;
 	uint64_t drawSerial = 0, configuredSerial[8] = {};
 	uint64_t multiviewCheckedGeneration[4] = {};
@@ -284,11 +287,15 @@ void MobileLightingStage::Init() {
 }
 void MobileLightingStage::Shutdown() {
 	EndFrame();
+	impl->foveation.Shutdown();
 	if ( impl->fbo ) impl->fbo->Destroy();
 	if ( impl->atlas ) impl->atlas->PurgeImage();
 	impl->shadowCache.clear();impl->layout.Clear();
 	impl->fbo = nullptr;
 	impl->atlas = nullptr;
+}
+void MobileLightingStage::GetFoveationDiagnostics(char *buffer,int size) const {
+	impl->foveation.GetDiagnostics(buffer,size);
 }
 void MobileLightingStage::EndFrame() {
 	if ( !impl->views.empty() && impl->eyeDraws > 0 && ++impl->frames % 120 == 0 && r_questShowRenderStats.GetBool() ) {
@@ -362,6 +369,7 @@ void MobileLightingStage::GetDiagnosticsText( char *buffer, int size ) const {
 void MobileLightingStage::BeginFrame( const emptyCommand_t *commands ) {
 	QuestCpuScope timing(questRenderCounters.prepareCpuMs,vr_rendererDiagnostics.GetBool());
 	EndFrame();
+	impl->foveation.BeginFrame();
 	impl->packets = impl->batches = impl->shadowDraws = impl->eyeDraws = 0;
 	impl->culledBatches = impl->splitBatches = 0;
 	impl->scissorPixels = impl->fullPixels = 0;
@@ -843,6 +851,26 @@ void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, ViewPlan &plan
 	u->shadowPage.SetArray(count, pages[0].ToFloatPtr());
 	u->shadowParams.SetArray(count, params[0].ToFloatPtr());
 	u->shadowProjection.SetArray(count, shadowProjections);
+	if(foveation.UsesDrawRates()) {
+		// Canonical bounds contain every clipped interaction for this mesh.
+		// Reuse the projection across its lights, including single-light draws.
+		const drawSurf_t *boundsSurf=first.geometry;
+		auto found=plan.foveationBounds.find(boundsSurf);
+		if(found==plan.foveationBounds.end()) {
+			MobileRenderPlan::Rect bounds;
+			if(stereo) {
+				float matrices[2][16];stereo->ModelViews(boundsSurf->space,matrices);
+				for(int eye=0;eye<2;++eye)bounds.Add(MobileRenderPlan::ProjectScissor(boundsSurf->geometryBounds[0].ToFloatPtr(),
+					boundsSurf->geometryBounds[1].ToFloatPtr(),matrices[eye],stereo->projection[eye],plan.viewport));
+			}else bounds=MobileRenderPlan::ProjectScissor(boundsSurf->geometryBounds[0].ToFloatPtr(),boundsSurf->geometryBounds[1].ToFloatPtr(),
+				boundsSurf->space->modelViewMatrix,view->projectionMatrix,plan.viewport);
+			found=plan.foveationBounds.emplace(boundsSurf,bounds).first;
+		}
+		auto bounds=found->second;
+		bounds.x1=std::max(bounds.x1,rect.x1);bounds.y1=std::max(bounds.y1,rect.y1);
+		bounds.x2=std::min(bounds.x2,rect.x2);bounds.y2=std::min(bounds.y2,rect.y2);
+		foveation.Draw(bounds);
+	}
 	RB_DrawElementsWithCounters(surf, DCK_INTERACTION); ++eyeDraws;
 }
 
@@ -891,6 +919,10 @@ void MobileLightingStage::Draw( const viewDef_t *view, const MobileStereoView *s
 	FB_ApplyScissor();
 	ViewPlan &plan = it->second;
 	plan.viewport = RB_QuestViewViewport(view);
+	plan.foveationBounds.clear();
+	impl->foveation.BeginLighting(plan.viewport,stereo?stereo->projection[0]:view->projectionMatrix,
+		stereo?stereo->projection[1]:nullptr,r_multiSamples.GetInteger(),
+		!view->isSubview&&!view->isPortalSky&&!view->IsLightGem()&&view->renderView.viewID==VID_PLAYER_VIEW);
 	plan.currentScissor = {}; // force the first draw to set actual pixel bounds
 	for ( auto &light : plan.lights ) {
 		if(stereo && R_UseQuestLightScissors() && light.light->frustumTris){
@@ -900,6 +932,7 @@ void MobileLightingStage::Draw( const viewDef_t *view, const MobileStereoView *s
 		} else light.rect=RB_QuestLightScissor(view,light.light,plan.viewport);
 	}
 	for ( const Batch &batch : plan.batches ) impl->DrawBatch(view, plan, batch);
+	impl->foveation.EndLighting();
 	FB_ApplyScissor();
 	qglEnable(GL_STENCIL_TEST);
 	qglStencilFunc(GL_ALWAYS, 128, 255);

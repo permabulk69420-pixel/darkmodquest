@@ -277,17 +277,10 @@ void FrameBufferManager::UpdateResolutionAndFormats() {
 void FrameBufferManager::CreatePrimary( FrameBuffer *primary ) {
 	int msaa = r_multiSamples.GetInteger();
 	primary->Init( renderWidth, renderHeight, msaa );	
-	// VR with foveated rendering: the scene goes into a texture that the GPU can foveate
-	idImage *foveatedColor = vrBackend->CreateFoveatedColorImage( renderWidth, renderHeight );
-	if ( foveatedColor ) {
-		primary->AddColorRenderTexture( 0, foveatedColor );
-	} else {
-		primary->AddColorRenderBuffer( 0, colorFormat );
-	}
+	// Keep a regular depth/stencil sample grid. Quest foveation now reduces
+	// lighting shader invocations without scaling colour/depth attachments.
+	primary->AddColorRenderBuffer( 0, colorFormat );
 	primary->AddDepthStencilRenderBuffer( depthStencilFormat );
-	if ( foveatedColor ) {
-		vrBackend->CheckFoveatedFramebuffer();
-	}
 }
 
 void FrameBufferManager::CreateResolve( FrameBuffer *resolve ) {

@@ -6,8 +6,8 @@
 #     (so ordinary pushes do not spend CI minutes)
 #   - manual "Run workflow" (needs this file to exist on the default branch)
 #
-# Simple phone download: Releases -> Quest 3 - Multiview Shader Fix.
-# APK filename: TDM-Quest3-Multiview-Shader-Fix.apk (also inside the Actions artifact).
+# Simple phone download: Releases -> Quest 3 - Multiview Foveation Fix.
+# APK filename: TDM-Quest3-Multiview-Foveation-Fix.apk (also inside the Actions artifact).
 
 name: Android APK - TDM only (arm64)
 
@@ -72,13 +72,13 @@ jobs:
     - name: Collect APK
       run: |
         mkdir -p out
-        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest3-Multiview-Shader-Fix.apk"
+        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest3-Multiview-Foveation-Fix.apk"
         ls -la out
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Quest3-Multiview-Shader-Fix-APK
+        name: Quest3-Multiview-Foveation-Fix-APK
         path: out/*.apk
         if-no-files-found: error
         retention-days: 30
@@ -88,12 +88,12 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        tag=quest-multiview-shader-fix
-        apk=out/TDM-Quest3-Multiview-Shader-Fix.apk
-        notes="Quest 3 ARM64: enables the multiview shader define through the engine's production preprocessor. Previous APKs linked ordinary shaders while the renderer uploaded two-eye data. Updates installed shader sources to version 10 and checks real two-eye uniforms before enabling multiview, with separate-eye fallback for incompatible shaders. Rendering checks now use production include/define preprocessing. Android ARM64 and real GLES checks pass; on-headset results remain unverified. Source commit: ${GITHUB_SHA} (branch ${GITHUB_REF_NAME})."
+        tag=quest-multiview-foveation-fix
+        apk=out/TDM-Quest3-Multiview-Foveation-Fix.apk
+        notes="Quest 3 ARM64: replaces texture-scaled foveation with depth-safe hardware shading-rate control for main-view lighting. Keeps eye resolution, full-resolution depth/stencil, UI and true multiview. Uses a spatial rate map when supported, or conservative QCOM rates for peripheral draws without extra draw calls. Sky, mirrors, shadows and material/effect passes stay full rate. Choose Foveated lighting -> Medium in launcher settings; Off remains the default. Installed shaders update to version 11. Android ARM64 build and production-code GLES/regression checks pass. Qualcomm on-headset visuals and FPS gains remain unmeasured; conservative draw-rate savings depend on scene geometry. Source commit: ${GITHUB_SHA} (branch ${GITHUB_REF_NAME})."
         if gh release view "$tag" >/dev/null 2>&1; then
           gh release upload "$tag" "$apk" --clobber
-          gh release edit "$tag" --title "Quest 3 - Multiview Shader Fix" --notes "$notes" --latest
+          gh release edit "$tag" --title "Quest 3 - Multiview Foveation Fix" --notes "$notes" --latest
         else
-          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 - Multiview Shader Fix" --notes "$notes" --latest
+          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 - Multiview Foveation Fix" --notes "$notes" --latest
         fi
