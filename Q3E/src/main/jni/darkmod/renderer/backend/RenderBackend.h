@@ -35,7 +35,9 @@ public:
 	void Init();
 	void Shutdown();
 
-	void DrawView( const viewDef_t *viewDef, bool colorIsBackground );
+	void DrawView( const viewDef_t *viewDef, bool colorIsBackground, bool sceneAlreadyDrawn = false );
+	void DrawMultiviewDepth( const viewDef_t *view, bool colorIsBackground, const struct MobileStereoView &stereo );
+	void CaptureDepth( const viewDef_t *view ) { depthStage.CaptureDepth(view); }
 	void DrawLightgem( const viewDef_t *viewDef, byte *lightgemData );
 
 	void EndFrame();

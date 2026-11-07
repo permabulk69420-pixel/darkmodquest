@@ -14,9 +14,17 @@ uniform sampler2D u_normalTexture, u_diffuseTexture, u_specularTexture, u_parall
 uniform sampler2D u_projection0, u_projection1, u_falloff0, u_falloff1;
 uniform samplerCube u_cube0, u_cube1, u_ambientDiffuse0, u_ambientDiffuse1, u_ambientSpecular0, u_ambientSpecular1;
 uniform highp sampler2D u_shadowAtlas;
-uniform sampler2D u_ssaoTexture;
 uniform mat4 u_modelMatrix;
+#ifdef QUEST_MULTIVIEW
+flat in int questEye;
+uniform highp sampler2DArray u_ssaoTexture;
+uniform vec3 u_viewOrigin[2];
+#define QUEST_ORIGIN u_viewOrigin[questEye]
+#else
+uniform sampler2D u_ssaoTexture;
 uniform vec3 u_viewOrigin;
+#define QUEST_ORIGIN u_viewOrigin
+#endif
 uniform vec4 u_clipPlane;
 uniform vec2 u_renderResolution, u_ambientParams;
 uniform int u_flags, u_lightCount, u_lightFlags[QUEST_LIGHT_CAPACITY], u_lightTextureSet[QUEST_LIGHT_CAPACITY], u_shadowFilter;
@@ -49,11 +57,15 @@ vec4 illuminate(int i, sampler2D projectionTexture, samplerCube projectionCube, 
         && all(equal(lightColor, vec3(0.0))))
         return vec4(0.0, 0.0, 0.0, 1.0);
     if (checkFlag(flags, 0x100000)) {
-        AmbientGeometry geom = computeAmbientGeometry(u_viewOrigin - positionWorld, normal, tangentToModel, mat3(u_modelMatrix));
+        AmbientGeometry geom = computeAmbientGeometry(QUEST_ORIGIN - positionWorld, normal, tangentToModel, mat3(u_modelMatrix));
         vec4 color = computeAmbientInteraction(geom, u_diffuseColor[i].rgb, diffuseTexel, u_specularColor[i].rgb, specularTexel,
             vertexColor.rgb, checkFlag(flags, SFL_LIGHT_AMBIENT_HAS_DIFFUSE_CUBEMAP), checkFlag(flags, SFL_LIGHT_AMBIENT_HAS_SPECULAR_CUBEMAP),
             ambientDiffuse, ambientSpecular, u_ambientParams.x, u_ambientParams.y);
+#ifdef QUEST_MULTIVIEW
+        float ao = checkFlag(flags, SFL_LIGHT_AMBIENT_HAS_SSAO) ? texture(u_ssaoTexture, vec3(gl_FragCoord.xy / u_renderResolution, float(questEye))).r : 1.0;
+#else
         float ao = checkFlag(flags, SFL_LIGHT_AMBIENT_HAS_SSAO) ? texture(u_ssaoTexture, gl_FragCoord.xy / u_renderResolution).r : 1.0;
+#endif
         return vec4(lightColor * ao * color.rgb, color.a);
     }
     vec3 toLight = (worldPosToObject(u_lightOrigin[i], u_modelMatrix) - positionModel) * tangentToModel - scaledOffset;

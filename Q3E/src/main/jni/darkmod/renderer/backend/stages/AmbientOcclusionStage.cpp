@@ -18,6 +18,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #pragma hdrstop
 
 #include "renderer/backend/stages/AmbientOcclusionStage.h"
+#include "renderer/backend/MobileMultiviewTargets.h"
 #include "renderer/QuestRenderDiagnostics.h"
 #include "renderer/resources/Image.h"
 #include "renderer/tr_local.h"
@@ -219,6 +220,12 @@ void AmbientOcclusionStage::BindSSAOTexture(int index) {
 	else {
 		globalImages->whiteImage->Bind();
 	}
+}
+
+void AmbientOcclusionStage::CopySSAOToLayer(GLuint texture, int layer) const {
+	if(!ShouldEnableForCurrentView())return;
+	R_QuestCopyImage(ssaoResult->texnum,GL_TEXTURE_2D,texture,GL_TEXTURE_2D_ARRAY,
+		ssaoResult->uploadWidth,ssaoResult->uploadHeight,layer);
 }
 
 bool AmbientOcclusionStage::ShouldEnableForCurrentView() const {

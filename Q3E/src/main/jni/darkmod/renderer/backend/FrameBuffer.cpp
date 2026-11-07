@@ -89,6 +89,18 @@ void FrameBuffer::AddColorRenderTexture( int attachment, idImage *texture, int m
 	AddRenderTexture( texture, GL_COLOR_ATTACHMENT0 + attachment, mipLevel );
 }
 
+void FrameBuffer::AddArrayLayer(GLuint color, GLuint depthStencil, int layer) {
+	Bind();
+	qglFramebufferTextureLayer(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,color,0,layer);
+	qglFramebufferTextureLayer(GL_FRAMEBUFFER,GL_DEPTH_STENCIL_ATTACHMENT,depthStencil,0,layer);
+}
+
+void FrameBuffer::AddMultiviewTextures(GLuint color, GLuint depthStencil, MultiviewAttachment attach) {
+	Bind();
+	attach(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,color,0,0,2);
+	attach(GL_FRAMEBUFFER,GL_DEPTH_STENCIL_ATTACHMENT,depthStencil,0,0,2);
+}
+
 void FrameBuffer::AddDepthStencilRenderBuffer( GLenum format ) {
 	AddRenderBuffer( depthRenderBuffer, GL_DEPTH_STENCIL_ATTACHMENT, format, name + "_depth" );
 }

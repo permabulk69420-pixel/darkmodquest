@@ -42,6 +42,9 @@ OpenXRBackend *vrBackend = &xrBackendInstance;
 #include "renderer/backend/FrameBufferManager.h"
 #include "renderer/backend/RenderBackend.h"
 #include "renderer/backend/GLSLProgramManager.h"
+#include "renderer/backend/MobileMultiviewTargets.h"
+#include "renderer/backend/MobileStereoView.h"
+#include "renderer/backend/stages/AmbientOcclusionStage.h"
 #include "renderer/QuestRenderDiagnostics.h"
 #include "framework/GamepadInput.h"
 #include "renderer/vr/xr_common.h"
@@ -366,6 +369,7 @@ struct OpenXRBackend::Impl {
 	int eyeHeight = 0;
 	XrGlSwapchain eyeSwapchains[2];
 	XrGlSwapchain uiSwapchain;
+	MobileMultiviewTargets multiview;
 
 	// pose data
 	XrView renderViews[2];			// poses of the frame being rendered
@@ -423,8 +427,10 @@ struct OpenXRBackend::Impl {
 	// ---- rendering ----
 	enum Pass { PASS_LEFT = 0, PASS_RIGHT = 1, PASS_UI = 2 };
 	void ExecutePass( const frameData_t *fd, Pass pass, FrameBuffer *target );
+	void ExecuteMultiview( const frameData_t *fd );
+	void UpdateViewForEye( viewDef_t *vd, int eye, bool updateEntities = true );
 	void UpdateViewsForEye( const emptyCommand_t *cmds, int eye );
-	void RepositionView( viewDef_t *vd, int eye );
+	void RepositionView( viewDef_t *vd, int eye, bool updateEntities = true );
 	static bool IsWorldView( const viewDef_t *vd );
 	static bool FrameHasWorldView( const frameData_t *fd );
 };
@@ -686,6 +692,7 @@ bool OpenXRBackend::Impl::Initialize() {
 }
 
 void OpenXRBackend::Impl::Shutdown() {
+	multiview.Shutdown();
 	timer.Shutdown();
 	DestroyFoveatedImage();
 	input.Destroy();
@@ -1000,7 +1007,7 @@ Moves a view to the pose of the given eye. Views derived from the player's view 
 - the portal sky only turns with the head (it is infinitely far away)
 - mirror views show the eye as reflected through the mirror(s)
 */
-void OpenXRBackend::Impl::RepositionView( viewDef_t *vd, int eye ) {
+void OpenXRBackend::Impl::RepositionView( viewDef_t *vd, int eye, bool updateEntities ) {
 	renderView_t &rv = vd->renderView;
 
 	// head pose of this eye relative to the tracking origin
@@ -1052,6 +1059,7 @@ void OpenXRBackend::Impl::RepositionView( viewDef_t *vd, int eye ) {
 
 	idRenderMatrix::Transpose( *(idRenderMatrix *)vd->projectionMatrix, vd->projectionRenderMatrix );
 	idRenderMatrix::Multiply( vd->projectionRenderMatrix, vd->viewRenderMatrix, vd->worldSpace.mvp );
+	if(!updateEntities)return;
 
 	// all entities (and the GUIs on surfaces, which are not in the entity list) need their modelview matrix updated
 	for ( viewEntity_t *ve = vd->viewEntitys; ve; ve = ve->next ) {
@@ -1077,18 +1085,94 @@ void OpenXRBackend::Impl::UpdateViewsForEye( const emptyCommand_t *cmds, int eye
 		if ( !IsWorldView( vd ) || vd->IsLightGem() ) {
 			continue;
 		}
-		renderView_t &rv = vd->renderView;
-		if ( !rv.followsHead ) {
-			if ( vd->isSubview || rv.viewID != VID_PLAYER_VIEW ) {
-				continue;	// e.g. security camera views have their own pose
-			}
-			// The frontend did not get a head pose for this view (first frames of a session). Treat the view as the body view.
-			rv.initialVieworg = rv.vieworg;
-			rv.initialViewaxis = rv.viewaxis;
-			rv.followsHead = true;
-		}
-		RepositionView( vd, eye );
+		UpdateViewForEye(vd,eye);
 	}
+}
+
+void OpenXRBackend::Impl::UpdateViewForEye(viewDef_t *vd,int eye,bool updateEntities){
+	auto &rv=vd->renderView;
+	if(!rv.followsHead){
+		if(vd->isSubview||rv.viewID!=VID_PLAYER_VIEW)return;
+		rv.initialVieworg=rv.vieworg;rv.initialViewaxis=rv.viewaxis;rv.followsHead=true;
+	}
+	RepositionView(vd,eye,updateEntities);
+}
+
+// Advance commands in stereo order: one layered depth/lighting submission, then
+// each eye's material/effect passes. Per-eye image identities preserve captures
+// when a mirror/camera/portal sky is consumed by a later command in the frame.
+void OpenXRBackend::Impl::ExecuteMultiview(const frameData_t *fd){
+	struct EyeState{FrameBuffer *current;bool tonemap,primary=true,background=false;};
+	EyeState eyes[2]={{eyeSwapchains[0].CurrentFrameBuffer(),r_tonemap.GetBool()},
+		{eyeSwapchains[1].CurrentFrameBuffer(),r_tonemap.GetBool()}};
+	auto select=[&](int eye){
+		multiview.SelectEye(eye);frameBuffers->defaultFbo=eyeSwapchains[eye].CurrentFrameBuffer();
+		frameBuffers->currentRenderFbo=eyes[eye].current;frameBuffers->tonemapNotYet=eyes[eye].tonemap;
+		eyes[eye].current->Bind();
+	};
+	auto save=[&](int eye){eyes[eye].current=frameBuffers->currentRenderFbo;eyes[eye].tonemap=frameBuffers->tonemapNotYet;};
+	r_useScissor.SetBool(false);r_useDepthBoundsTest.SetBool(false);
+	RB_SetDefaultGLState();if(rawSrgbWrites)qglDisable(0x8DB9);
+	for(int eye=0;eye<2;++eye){select(eye);GL_ViewportRelative(0,0,1,1);GL_ScissorRelative(0,0,1,1);
+		qglClearColor(0,0,0,1);qglClear(GL_COLOR_BUFFER_BIT);}
+	multiview.Layered()->Bind();GL_ViewportRelative(0,0,1,1);GL_ScissorRelative(0,0,1,1);
+	qglClearColor(0,0,0,1);qglClear(GL_COLOR_BUFFER_BIT);
+	for(const auto *cmd=fd->cmdHead;cmd;cmd=NextCommand(cmd)){
+		if(cmd->commandId==RC_DRAW_VIEW){
+			auto *view=const_cast<viewDef_t *>(((const drawSurfsCommand_t *)cmd)->viewDef);
+			if(!IsWorldView(view))continue;
+			const bool shared=eyes[0].primary&&eyes[1].primary&&renderBackend->MobileLighting().CanDrawMultiview(view,multiview)&&
+				!r_skipRender.GetBool()&&!r_skipRenderContext.GetBool();
+			MobileStereoView stereo;
+			if(shared){
+				for(int eye=0;eye<2;++eye){
+					UpdateViewForEye(view,eye,false);backEnd.viewDef=view;select(eye);frameBuffers->EnterPrimary();save(eye);
+					memcpy(stereo.projection[eye],view->projectionMatrix,sizeof(stereo.projection[eye]));
+					memcpy(stereo.worldView[eye],view->worldSpace.modelViewMatrix,sizeof(stereo.worldView[eye]));
+					stereo.origin[eye]=view->renderView.vieworg;
+				}
+				multiview.Layered()->Bind();renderBackend->DrawMultiviewDepth(view,eyes[0].background,stereo);
+				for(int eye=0;eye<2;++eye){
+					UpdateViewForEye(view,eye,false);select(eye);renderBackend->CaptureDepth(view);
+					if(ambientOcclusion->ShouldEnableForCurrentView()){
+						ambientOcclusion->ComputeSSAOFromDepth();ambientOcclusion->CopySSAOToLayer(multiview.SSAOTexture(),eye);
+					}
+					save(eye);
+				}
+				stereo.ssaoTexture=multiview.SSAOTexture();multiview.Layered()->Bind();
+				QuestCpuScope timing(questRenderCounters.lightingCpuMs,vr_rendererDiagnostics.GetBool());
+				renderBackend->MobileLighting().Draw(view,&stereo);
+			}
+			for(int eye=0;eye<2;++eye){
+				UpdateViewForEye(view,eye);backEnd.viewDef=view;select(eye);
+				if(eyes[eye].primary)frameBuffers->EnterPrimary();
+				renderBackend->DrawView(view,eyes[eye].background,shared);
+				eyes[eye].background=view->outputColorIsBackground;save(eye);
+			}
+			GL_CheckErrors();continue;
+		}
+		if(cmd->commandId==RC_DRAW_LIGHTGEM){
+			select(0);backEnd.viewDef=((const drawLightgemCommand_t *)cmd)->viewDef;
+			renderBackend->DrawLightgem(backEnd.viewDef,((const drawLightgemCommand_t *)cmd)->dataBuffer);save(0);continue;
+		}
+		for(int eye=0;eye<2;++eye){
+			select(eye);
+			switch(cmd->commandId){
+			case RC_NOP:case RC_SET_BUFFER:break;
+			case RC_COPY_RENDER:RB_CopyRender(cmd);break;
+			case RC_BLOOM:if(RB_Bloom((bloomCommand_t *)cmd)){FB_DebugShowContents();frameBuffers->LeavePrimary();}break;
+			case RC_TONEMAP:{
+				frameBuffers->LeavePrimary();
+				if(!((const tonemapCommand_t *)cmd)->forceOutputToBlack)renderBackend->Tonemap();
+				else {frameBuffers->defaultFbo->Bind();qglClearColor(0,0,0,0);qglClear(GL_COLOR_BUFFER_BIT);}
+				eyes[eye].primary=false;frameBuffers->tonemapNotYet=false;frameBuffers->LeavePrimary(false);break;
+			}
+			default:common->Error("OpenXR multiview: unexpected command %d",cmd->commandId);break;
+			}
+			save(eye);
+		}
+	}
+	multiview.EndFrame();
 }
 
 /*
@@ -1259,13 +1343,19 @@ void OpenXRBackend::Impl::RenderFrame( const frameData_t *fd ) {
 			// depth and material/light packets are independent of the late eye
 			// pose: build once, before either eye starts its tile render pass.
 			renderBackend->PrepareStereoFrame( fd->cmdHead );
-			ExecutePass( fd, PASS_LEFT, eyeSwapchains[0].CurrentFrameBuffer() );
-			ExecutePass( fd, PASS_RIGHT, eyeSwapchains[1].CurrentFrameBuffer() );
+			if(hasWorldView&&R_UseMobileLighting()&&vr_foveation.GetInteger()==0&&multiview.BeginFrame(fd->cmdHead)){
+				reusedCameraCommands.clear();
+				ExecuteMultiview(fd);
+			} else {
+				ExecutePass( fd, PASS_LEFT, eyeSwapchains[0].CurrentFrameBuffer() );
+				ExecutePass( fd, PASS_RIGHT, eyeSwapchains[1].CurrentFrameBuffer() );
+			}
 			ExecutePass( fd, PASS_UI, uiSwapchain.CurrentFrameBuffer() );
 			if ( vr_rendererDiagnostics.GetBool() ) UpdateDiagnostics(fd);
 			renderBackend->FinishStereoFrame();
 			timer.EndGpu();
 		} catch ( ... ) {
+			multiview.EndFrame();
 			renderBackend->FinishStereoFrame();
 			timer.EndGpu();
 			// the engine reports errors with exceptions: leave everything in a state that lets the next frame start cleanly

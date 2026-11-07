@@ -165,7 +165,7 @@ class MobileShaderTests(unittest.TestCase):
         cls.shadow=cls.gl.program(source('stages/mobile/shadow.vert.glsl'),source('stages/mobile/shadow.frag.glsl'))
     @classmethod
     def tearDownClass(cls): cls.gl.close()
-    def setup_forward(self, ambient=True, light_count=1, eye=-0.25):
+    def setup_forward(self, ambient=True, light_count=1, eye=-0.25, draw=True):
         g=self.gl; p=self.forward
         g.target(); g.call('glViewport',0,0,16,16); g.call('glUseProgram',p)
         g.call('glDisable',0x0B71); g.call('glDisable',0x0BE2); g.call('glDisable',0x0B90)
@@ -190,8 +190,93 @@ class MobileShaderTests(unittest.TestCase):
             # Each column is a projection/falloff plane, as in drawInteraction_t.
             g.uniform(p,f'u_lightProjection[{i}]',[0.,0.,0.,0.5, 0.,0.,0.,0.5, 0.,0.,0.,1., 0.,0.,0.,0.5],'m')
             g.uniform(p,f'u_lightTextureMatrix[{2*i}]',[1.,0.,0.,0.]);g.uniform(p,f'u_lightTextureMatrix[{2*i+1}]',[0.,1.,0.,0.])
-        g.quad();g.call('glDrawArrays',0x0004,0,6)
-        return g.pixel()
+        g.quad()
+        if draw:
+            g.call('glDrawArrays',0x0004,0,6)
+            return g.pixel()
+
+    def test_true_multiview_depth_and_lighting_match_two_eye_draws(self):
+        g=self.gl;general=self.forward
+        extensions=g.fn('glGetString',C.c_char_p,C.c_uint)(0x1F03).decode()
+        self.assertIn('GL_OVR_multiview2',extensions)
+        def multiview(path):return source(path).replace('#version 320 es','#version 320 es\n#define QUEST_MULTIVIEW 1',1)
+        depth=g.program(source('stages/depth/depth.vert.glsl'),source('stages/depth/depth.frag.glsl'))
+        depth_mv=g.program(multiview('stages/depth/depth.vert.glsl'),source('stages/depth/depth.frag.glsl'))
+        def array_texture(fmt,w=16,h=16,data=None):
+            tex=g.gen('glGenTextures');g.call('glActiveTexture',0x84CF);g.call('glBindTexture',0x8C1A,tex)
+            g.call('glTexStorage3D',0x8C1A,1,fmt,w,h,2)
+            for enum in (0x2800,0x2801):g.call('glTexParameteri',0x8C1A,enum,0x2600)
+            for enum in (0x2802,0x2803):g.call('glTexParameteri',0x8C1A,enum,0x812F)
+            if data is not None:
+                rgba=(C.c_ubyte*len(data))(*data)
+                g.call('glTexSubImage3D',0x8C1A,0,0,0,0,w,h,2,0x1908,0x1401,rgba)
+            return tex
+        color=array_texture(0x8058);z=array_texture(0x88F0)
+        layered=g.gen('glGenFramebuffers');g.call('glBindFramebuffer',0x8D40,layered)
+        for attachment,tex in ((0x8CE0,color),(0x821A,z)):
+            g.call('glFramebufferTextureMultiviewOVR',0x8D40,attachment,tex,0,0,2)
+        self.assertEqual(g.fn('glCheckFramebufferStatus',C.c_uint,C.c_uint)(0x8D40),0x8CD5)
+        readers=[]
+        for eye in range(2):
+            reader=g.gen('glGenFramebuffers');g.call('glBindFramebuffer',0x8D40,reader)
+            g.call('glFramebufferTextureLayer',0x8D40,0x8CE0,color,0,eye)
+            g.call('glFramebufferTextureLayer',0x8D40,0x821A,z,0,eye)
+            self.assertEqual(g.fn('glCheckFramebufferStatus',C.c_uint,C.c_uint)(0x8D40),0x8CD5)
+            readers.append(reader)
+        ao=array_texture(0x8058,1,1,[64,64,64,255,220,220,220,255])
+        projections=[];views=[]
+        for eye in (-1,1):
+            projection=PROJECTION.copy();projection[8]=eye*.11;projections.append(projection)
+            view=IDENTITY.copy();view[12]=eye*.125;views.append(view)
+        def config(program,eye=None):
+            self.forward=program;self.setup_forward(ambient=False,light_count=capacity,draw=False)
+            for i in range(capacity):
+                g.uniform(program,f'u_lightFlags[{i}]',(0x100000|0x800) if i%3==0 else 0,'i')
+                g.uniform(program,f'u_diffuseColor[{i}]',[.03,.025,.02,1.])
+                g.uniform(program,f'u_specularColor[{i}]',[.02,.02,.02,1.])
+            if eye is None:
+                for e in range(2):
+                    g.uniform(program,f'u_modelViewMatrix[{e}]',views[e],'m')
+                    g.uniform(program,f'u_projectionMatrix[{e}]',projections[e],'m')
+                    g.uniform(program,f'u_viewOrigin[{e}]',[-.03125 if e==0 else .03125,0.,0.])
+                g.call('glActiveTexture',0x84CF);g.call('glBindTexture',0x8C1A,ao)
+            else:
+                g.uniform(program,'u_modelViewMatrix',views[eye],'m')
+                g.uniform(program,'u_projectionMatrix',projections[eye],'m')
+                g.uniform(program,'u_viewOrigin',[-.03125 if eye==0 else .03125,0.,0.])
+                g.texture(15,(64,64,64,255) if eye==0 else (220,220,220,255))
+        def render(target,program,dp,eye,alpha,clip):
+            g.call('glBindFramebuffer',0x8D40,target);g.call('glViewport',0,0,16,16)
+            g.call('glDisable',0x0C11);g.call('glDisable',0x0BE2);g.call('glDisable',0x0B90)
+            g.call('glEnable',0x0B71);g.call('glDepthMask',1);g.call('glDepthFunc',0x0201)
+            g.call('glClearColor',.03,.04,.05,1.);g.call('glClearDepthf',1.);g.call('glClear',0x00004000|0x00000100)
+            g.call('glUseProgram',dp)
+            g.uniform(dp,'u_modelMatrix',IDENTITY,'m');g.uniform(dp,'u_textureMatrix',IDENTITY,'m')
+            g.uniform(dp,'u_clipPlane',clip);g.uniform(dp,'u_color',[0.,0.,0.,1.])
+            g.uniform(dp,'u_texture',0,'i');g.uniform(dp,'u_alphaTest',-1. if alpha==255 else .5)
+            for e in (range(2) if eye is None else (eye,)):
+                suffix=f'[{e}]' if eye is None else ''
+                g.uniform(dp,'u_modelViewMatrix'+suffix,views[e],'m')
+                g.uniform(dp,'u_projectionMatrix'+suffix,projections[e],'m')
+            g.texture(0,(255,255,255,alpha));g.quad(z=-4.17,span=2.6);g.call('glDrawArrays',4,0,6)
+            g.texture(0,(128,128,255,255));g.call('glUseProgram',program);g.uniform(program,'u_clipPlane',clip)
+            g.call('glDepthMask',0);g.call('glDepthFunc',0x0202)
+            g.call('glEnable',0x0BE2);g.call('glBlendFunc',1,1);g.call('glDrawArrays',4,0,6)
+        try:
+            for capacity in (1,2,4,8):
+                fragment='stages/mobile/forward.frag.glsl' if capacity==8 else f'stages/mobile/forward_{capacity}.frag.glsl'
+                program=g.program(multiview('stages/mobile/forward.vert.glsl'),multiview(fragment))
+                for alpha,clip in ((255,[0.,0.,0.,0.]),(0,[0.,0.,0.,0.]),(255,[1.,0.,0.,0.])):
+                    references=[]
+                    for eye in range(2):
+                        reference=g.target(depth_buffer=True);config(general,eye)
+                        render(reference,general,depth,eye,alpha,clip);references.append(g.pixels(16,16))
+                    config(program);render(layered,program,depth_mv,None,alpha,clip)
+                    for eye in range(2):
+                        g.call('glBindFramebuffer',0x8D40,readers[eye]);actual=g.pixels(16,16)
+                        self.assertLessEqual(max(abs(a-b) for a,b in zip(references[eye],actual)),1,(capacity,alpha,clip,eye))
+            print('True multiview GLES: one depth + one lighting draw produce both eye layers; matches two-eye reference with asymmetric poses, SSAO, cutouts and clipping')
+        finally:self.forward=general
     def test_batched_lights_add_without_repeating_material_draw(self):
         one=self.setup_forward(light_count=1); two=self.setup_forward(light_count=2)
         self.assertGreater(one[0],10)

@@ -21,6 +21,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #include "renderer/backend/FrameBufferManager.h"
 #include "renderer/backend/GLSLProgramManager.h"
 #include "renderer/backend/GLSLUniforms.h"
+#include "renderer/backend/MobileStereoView.h"
 
 
 struct DepthStage::DepthUniforms : GLSLUniformGroup {
@@ -64,22 +65,29 @@ void DepthStage::CalcScissorParam( uint32_t scissor[4], const idScreenRect &scre
 
 void DepthStage::Init() {
 	depthShader = programManager->LoadFromGenerator( "depth", [=](GLSLProgram *program) { LoadShader(program); } );
+	multiviewShader = programManager->LoadFromGenerator("quest_multiview_depth",[](GLSLProgram *program){
+		idHashMapDict defines;defines["QUEST_MULTIVIEW"]="1";
+		program->LoadFromFiles("stages/depth/depth.vert.glsl","stages/depth/depth.frag.glsl",defines);
+	});
 }
 
 void DepthStage::Shutdown() {}
 
-void DepthStage::DrawDepth( const viewDef_t *viewDef, drawSurf_t **drawSurfs, int numDrawSurfs ) {
+void DepthStage::DrawDepth( const viewDef_t *viewDef, drawSurf_t **drawSurfs, int numDrawSurfs, const MobileStereoView *stereo ) {
 	if ( numDrawSurfs == 0 ) {
 		return;
 	}
+	this->stereo=stereo;
 
 	TRACE_GL_SCOPE( "DepthStage" );
 
-	GLSLProgram *shader = depthShader;
+	GLSLProgram *shader = stereo ? multiviewShader : depthShader;
+	if(!shader->EnsureLinked())common->Error("Quest scene depth shader failed to compile or link");
 	shader->Activate();
 	uniforms = shader->GetUniformGroup<DepthUniforms>();
 
-	uniforms->projectionMatrix.Set( viewDef->projectionMatrix );
+	if(stereo) uniforms->projectionMatrix.SetArray(2,stereo->projection[0]);
+	else uniforms->projectionMatrix.Set( viewDef->projectionMatrix );
 
 	// pass mirror clip plane details to vertex shader if needed
 	if ( viewDef->numClipPlanes ) {
@@ -109,6 +117,11 @@ void DepthStage::DrawDepth( const viewDef_t *viewDef, drawSurf_t **drawSurfs, in
 		DrawSurf( drawSurf );
 	}
 
+	if(!stereo) CaptureDepth(viewDef);
+	this->stereo=nullptr;
+}
+
+void DepthStage::CaptureDepth( const viewDef_t *viewDef ) {
 	// Make the early depth pass available to shaders. #3877
 	if ( !viewDef->IsLightGem() && !r_skipDepthCapture.GetBool() ) {
 		if ( ( !viewDef->isSubview || viewDef->isXray || viewDef->isMirrorInverted ) && !viewDef->renderWorld->mapName.IsEmpty() ) // compass
@@ -228,7 +241,10 @@ void DepthStage::IssueDrawCommand( const drawSurf_t *surf, const shaderStage_t *
 		stage->texture.image->Bind();
 	}
 
-	uniforms->modelViewMatrix.Set( surf->space->modelViewMatrix );
+	if(stereo) {
+		float matrices[2][16];stereo->ModelViews(surf->space,matrices);
+		uniforms->modelViewMatrix.SetArray(2,matrices[0]);
+	} else uniforms->modelViewMatrix.Set( surf->space->modelViewMatrix );
 	uniforms->modelMatrix.Set( surf->space->modelMatrix );
 
 	// TODO #6349: Fix FB_ApplyScissor and use it here

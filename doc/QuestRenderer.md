@@ -5,6 +5,25 @@ late eye poses, controllers, swapchains, foveation, the HUD overlay, and frame
 submission. When OpenXR is active, `r_questRenderer` defaults to the new mobile
 lighting pipeline. Flat rendering continues to use the existing backend.
 
+`r_questMultiview` defaults to 1. On `GL_OVR_multiview2` hardware, the scene uses
+two-layer color/depth-stencil targets. A single depth submission per surface and
+a single lighting submission per batch produce both eyes, using `gl_ViewID_OVR`
+to select the late OpenXR eye matrices and eye-dependent shading. The command
+loop advances both eyes together rather than replaying the complete scene twice.
+OpenXR still acquires/submits its existing eye swapchains and HUD layer.
+
+This path currently requires MSAA off (0 or 1 sample) and foveation off, matching
+the reported Quest settings. Requested MSAA/foveation, unsupported extensions,
+cutscenes and render-dependent textures used directly in lighting interactions
+retain the existing rendering path. The existing diagnostics pipeline row shows
+actual multiview versus separate-eye lighting passes; a setting alone does not
+claim multiview is running. Mirror, camera and portal-sky capture images have
+separate storage per eye, including their dimensions, format and swizzle. Reloads,
+resizing and retirement invalidate that storage. SSAO remains computed per eye,
+then copied into matching array layers for multiview lighting. Ordinary material,
+refraction, fog, volumetric and post-processing passes retain eye-specific draws;
+this does not claim every rendering pass has been converted to multiview.
+
 ## Frame work
 
 Before either eye replay, `MobileLightingStage` walks the recorded views once:
@@ -48,8 +67,9 @@ Before either eye replay, `MobileLightingStage` walks the recorded views once:
    ordinary GLES clipping, without geometry shaders or clip-distance extensions.
    Directional lights use a fitted orthographic projection.
 
-Each eye then uses its existing depth pass and current OpenXR view matrices to
-shade the prepared batches. Material texture fetches and parallax displacement
+Multiview depth and lighting use the same CPU-composed modelview matrices and
+invariant position calculations as the ordinary path, preserving `GL_EQUAL`.
+Material texture fetches and parallax displacement
 are shared between up to eight lights in a batch. Specular/view-dependent shading,
 SSAO, soft particles, fog, volumetrics, and post-processing remain per eye.
 Lighting scissors are rebuilt from immutable light bounds and each eye's late
@@ -75,11 +95,12 @@ Volumetrics read the same shared shadow atlas. UI rendering and the lightgem
 PBO/readback protocol are unchanged; lightgem lighting retains hard shadows and
 its gamma convention.
 
-This removes the second eye's shadow generation and material packet preparation.
+This removes the second eye's shadow generation, material packet preparation,
+depth draw submissions and lighting draw submissions on the multiview path.
 An eight-light batch can replace four former two-light draws with one. A warm
 unchanged shadow face needs neither shadow draws nor depth copies. Surface
-shading still runs for each eye; this is not a claim
-that all stereo GPU work is eliminated. No multiview extension is required.
+shading still runs for each eye in the GPU; multiview eliminates duplicate CPU
+submissions without making the two eye images identical.
 
 ## Quality and memory
 
@@ -193,12 +214,24 @@ python3 tests/renderer/shader_install_test.py
 python3 tests/renderer/fog_policy_test.py
 python3 tests/renderer/mobile_batch_test.py
 python3 tests/renderer/mobile_submission_test.py
+python3 tests/renderer/mobile_multiview_commands_test.py
+python3 tests/renderer/mobile_multiview_targets_test.py
 g++ -std=c++14 -O2 -I Q3E/src/main/jni/darkmod tests/renderer/mobile_shadow_cache_test.cpp -o /tmp/quest-cache-test
 /tmp/quest-cache-test
 ```
 
 The GLES tests require EGL and a GLES 3.2 driver (Mesa software rendering works).
 They compile/link the actual shipping shaders and render small offscreen targets.
+The multiview regression runs `glFramebufferTextureMultiviewOVR` on a real driver
+and compares both array layers against separate-eye depth/lighting renders for
+all four light capacities, asymmetric eye poses, distinct SSAO, cutout rejection
+and clipping. The target lifecycle test compiles the production stereo target
+implementation, attachment helpers and image allocation method against real GLES,
+checking mutable captures, independent eye layers, resize, reload, retirement and
+FBO state restoration. The command test compiles the actual OpenXR scheduler and
+checks single shared submissions, per-eye captures/backgrounds/effects, a single
+lightgem execution and fallback views. These fixtures do not run the game or the
+Meta compositor and do not measure Quest frame times.
 The eleven-frame cached global/local shadow sequence compares every output pixel
 against fresh rendering through movement, disappearance, cutout changes and
 storage invalidation: 49 reference draws become 35, with identical pixels and

@@ -30,6 +30,7 @@ public:
 	bool ShouldEnableForCurrentView() const;
 
 	void BindSSAOTexture(int index);
+	void CopySSAOToLayer(GLuint texture, int layer) const;
 
 	void ShowSSAO();
 

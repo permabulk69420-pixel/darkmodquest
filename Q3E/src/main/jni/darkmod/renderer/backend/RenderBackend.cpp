@@ -17,6 +17,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #pragma hdrstop
 
 #include "renderer/backend/RenderBackend.h"
+#include "renderer/backend/VertexArrayState.h"
 #include "renderer/QuestRenderDiagnostics.h"
 
 #include "renderer/backend/stages/AmbientOcclusionStage.h"
@@ -87,7 +88,15 @@ void RenderBackend::Shutdown() {
 	depthStage.Shutdown();
 }
 
-void RenderBackend::DrawView( const viewDef_t *viewDef, bool colorIsBackground ) {
+void RenderBackend::DrawMultiviewDepth( const viewDef_t *view, bool colorIsBackground, const MobileStereoView &stereo ) {
+	backEnd.viewDef=view;backEnd.depthFunc=GLS_DEPTHFUNC_EQUAL;
+	RB_BeginDrawingView(colorIsBackground);
+	backEnd.lightScale=r_lightScale.GetFloat();backEnd.overBright=1.0f;
+	QuestCpuScope timing(questRenderCounters.depthCpuMs,vr_rendererDiagnostics.GetBool());
+	depthStage.DrawDepth(view,view->drawSurfs,view->numDrawSurfs,&stereo);
+}
+
+void RenderBackend::DrawView( const viewDef_t *viewDef, bool colorIsBackground, bool sceneAlreadyDrawn ) {
 	TRACE_CPU_SCOPE_FORMAT( "DrawView", "viewCount = %d\nID = %d", viewDef->viewCount, viewDef->renderView.viewID );
 	TRACE_GL_SCOPE( "DrawView" );
 
@@ -111,7 +120,13 @@ void RenderBackend::DrawView( const viewDef_t *viewDef, bool colorIsBackground )
 	backEnd.depthFunc = GLS_DEPTHFUNC_EQUAL;
 
 	// clear the framebuffer, set the projection matrix, etc
-	RB_BeginDrawingView( colorIsBackground );
+	if(!sceneAlreadyDrawn) RB_BeginDrawingView( colorIsBackground );
+	else {
+		// Continue the eye's material/effect passes against its existing layer.
+		GL_SetProjection((float *)viewDef->projectionMatrix);FB_ApplyViewport();
+		backEnd.currentScissor=viewDef->scissor;FB_ApplyScissor();
+		vaState.SetDefaultState();GL_Cull(CT_FRONT_SIDED);
+	}
 
 	backEnd.lightScale = r_lightScale.GetFloat();
 	backEnd.overBright = 1.0f;
@@ -120,7 +135,7 @@ void RenderBackend::DrawView( const viewDef_t *viewDef, bool colorIsBackground )
 	int numDrawSurfs = viewDef->numDrawSurfs;
 
 	// if we are just doing 2D rendering, no need to fill the depth buffer
-	if ( viewDef->viewEntitys ) {
+	if ( viewDef->viewEntitys && !sceneAlreadyDrawn ) {
 		// fill the depth buffer and clear color buffer to black except on subviews
 		{
 			QuestCpuScope timing(questRenderCounters.depthCpuMs,vr_rendererDiagnostics.GetBool());

@@ -22,12 +22,15 @@ public:
 	void Init();
 	void Shutdown();
 
-	void DrawDepth( const viewDef_t *viewDef, drawSurf_t **drawSurfs, int numDrawSurfs );
+	void DrawDepth( const viewDef_t *viewDef, drawSurf_t **drawSurfs, int numDrawSurfs, const struct MobileStereoView *stereo = nullptr );
+	void CaptureDepth( const viewDef_t *viewDef );
 
 private:
 	struct DepthUniforms;
 
 	GLSLProgram *depthShader = nullptr;
+	GLSLProgram *multiviewShader = nullptr;
+	const struct MobileStereoView *stereo = nullptr;
 	DepthUniforms *uniforms = nullptr;
 
 	bool ShouldDrawSurf( const drawSurf_t *surf ) const;

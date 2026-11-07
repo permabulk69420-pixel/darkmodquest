@@ -25,9 +25,10 @@ public:
 	void BeginFrame( const emptyCommand_t *commands );
 	void EndFrame();
 	bool HasView( const viewDef_t *view ) const;
+	bool CanDrawMultiview( const viewDef_t *view, const class MobileMultiviewTargets &targets ) const;
 	bool HasFrame() const;
 	void GetDiagnosticsText( char *buffer, int size ) const; // render thread only
-	void Draw( const viewDef_t *view );
+	void Draw( const viewDef_t *view, const struct MobileStereoView *stereo = nullptr );
 	// Volumetric lights sample the same shared depth as opaque/translucent
 	// surfaces, so there is no second shadow renderer or unshadowed light leak.
 	bool GetShadow( const viewDef_t *view, const viewLight_t *light, idVec4 &page,

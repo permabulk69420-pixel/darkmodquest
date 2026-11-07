@@ -297,7 +297,7 @@ void FrameBufferManager::CreateResolve( FrameBuffer *resolve ) {
 	globalImages->currentDepthImage->GenerateAttachment( renderWidth, renderHeight, depthStencilFormat, GL_NEAREST );
 	globalImages->currentDepthImage->Bind();
 	GLint swizzleMask[] = { GL_RED, GL_RED, GL_RED, GL_RED };
-	qglTexParameteriv( GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, swizzleMask );
+	for(int c=0;c<4;++c)qglTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_SWIZZLE_R+c,swizzleMask[c]);
 	resolve->AddDepthRenderTexture( globalImages->currentDepthImage );
 }
 
@@ -322,7 +322,7 @@ bool FrameBufferManager::EnsureScratchImageCreated( idImageScratch *image, int w
 		// some postprocessing effects alpha-blend scratch image with specified "alpha" and standard blending mode (e.g. textures/water_source/water_reflective2)
 		// leftover alpha content affect these effects in undesirable way --- especially bad if alpha of scratch image can exceed 1.0
 		GLint swizzleMask[] = { GL_RED, GL_GREEN, GL_BLUE, GL_ONE };
-		qglTexParameteriv( GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, swizzleMask );
+		for(int c=0;c<4;++c)qglTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_SWIZZLE_R+c,swizzleMask[c]);
 	}
 
 	if ( image->texnum == idImage::TEXTURE_NOT_LOADED || image->uploadWidth != width || image->uploadHeight != height ) {

@@ -1,4 +1,8 @@
 #version 320 es
+#ifdef QUEST_MULTIVIEW
+#extension GL_OVR_multiview2 : require
+layout(num_views=2) in;
+#endif
 /*****************************************************************************
 The Dark Mod GPL Source Code
 
@@ -25,8 +29,15 @@ invariant gl_Position;
 in vec4 attr_Position;
 in vec2 attr_TexCoord;
 
-uniform mat4 u_modelViewMatrix;
-uniform mat4 u_projectionMatrix;
+#ifdef QUEST_MULTIVIEW
+uniform mat4 u_modelViewMatrix[2], u_projectionMatrix[2];
+#define QUEST_MODELVIEW u_modelViewMatrix[gl_ViewID_OVR]
+#define QUEST_PROJECTION u_projectionMatrix[gl_ViewID_OVR]
+#else
+uniform mat4 u_modelViewMatrix, u_projectionMatrix;
+#define QUEST_MODELVIEW u_modelViewMatrix
+#define QUEST_PROJECTION u_projectionMatrix
+#endif
 
 uniform mat4 u_textureMatrix;
 uniform vec4 u_clipPlane;
@@ -38,5 +49,5 @@ out vec4 var_TexCoord0;
 void main() {
 	var_TexCoord0 = u_textureMatrix * vec4(attr_TexCoord, 0.0, 1.0);
 	clipPlaneDist = dot(u_modelMatrix * attr_Position, u_clipPlane);
-	gl_Position = objectPosToClip(attr_Position, u_modelViewMatrix, u_projectionMatrix);
+	gl_Position = objectPosToClip(attr_Position, QUEST_MODELVIEW, QUEST_PROJECTION);
 }

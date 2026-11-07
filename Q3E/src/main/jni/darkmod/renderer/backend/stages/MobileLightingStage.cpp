@@ -8,6 +8,8 @@
 #include "renderer/backend/GLSLProgramManager.h"
 #include "renderer/backend/GLSLUniforms.h"
 #include "renderer/backend/MobileUniform.h"
+#include "renderer/backend/MobileStereoView.h"
+#include "renderer/backend/MobileMultiviewTargets.h"
 #include "renderer/backend/FrameBufferManager.h"
 #include "renderer/backend/FrameBuffer.h"
 #include "renderer/vr/OpenXRBackend.h"
@@ -224,8 +226,10 @@ void Bind( int unit, idImage *image ) { image->BindToUnit(unit); }
 }
 
 struct MobileLightingStage::Impl {
-	GLSLProgram *lighting[4] = {}, *depth = nullptr;
-	uint64_t drawSerial = 0, configuredSerial[4] = {};
+	GLSLProgram *lighting[8] = {}, *depth = nullptr;
+	uint64_t drawSerial = 0, configuredSerial[8] = {};
+	const MobileStereoView *stereo = nullptr;
+	int multiviewPasses = 0;
 	idImageScratch *atlas = nullptr;
 	FrameBuffer *fbo = nullptr;
 	MobileShadowCache::AtlasLayout layout;
@@ -264,10 +268,13 @@ MobileLightingStage::~MobileLightingStage() = default;
 
 void MobileLightingStage::Init() {
 #ifdef TDM_VR_OPENXR
-	for(int i=0;i<4;++i) {
-		const int count=1<<i;
+	for(int i=0;i<8;++i) {
+		const int count=1<<(i%4);
 		const idStr fragment=count==8 ? "stages/mobile/forward.frag.glsl" : va("stages/mobile/forward_%d.frag.glsl",count);
-		impl->lighting[i]=programManager->LoadFromFiles(va("quest_forward_%d",count),"stages/mobile/forward.vert.glsl",fragment);
+		impl->lighting[i]=programManager->LoadFromGenerator(va("quest_%sforward_%d",i>=4?"multiview_":"",count),[fragment,i](GLSLProgram *program){
+			idHashMapDict defines;if(i>=4)defines["QUEST_MULTIVIEW"]="1";
+			program->LoadFromFiles("stages/mobile/forward.vert.glsl",fragment,defines);
+		});
 	}
 	impl->depth = programManager->LoadFromFiles( "quest_shadow_depth", "stages/mobile/shadow.vert.glsl", "stages/mobile/shadow.frag.glsl" );
 #endif
@@ -294,6 +301,19 @@ void MobileLightingStage::EndFrame() {
 bool MobileLightingStage::HasView( const viewDef_t *view ) const {
 	return R_UseMobileLighting() && impl->views.count(view) != 0;
 }
+bool MobileLightingStage::CanDrawMultiview(const viewDef_t *view,const MobileMultiviewTargets &targets) const {
+	auto it=impl->views.find(view);if(it==impl->views.end())return false;
+	// A captured render texture in an interaction cannot be broadcast to both
+	// eyes. Preserve ordering/LDR clamping by retaining that view's normal path.
+	// Ambient/refraction material stages always keep their separate eye passes.
+	for(const auto &packet:it->second.packets){
+		const auto &d=packet.inter;
+		idImage *textures[]={d.bumpImage,d.diffuseImage,d.specularImage,d.parallaxImage,d.lightImage,d.lightFalloffImage,
+			packet.light->lightShader->LightAmbientDiffuse(),packet.light->lightShader->LightAmbientSpecular()};
+		for(auto *image:textures)if(targets.IsPerEyeImage(image))return false;
+	}
+	return true;
+}
 bool MobileLightingStage::HasFrame() const { return !impl->views.empty(); }
 
 void MobileLightingStage::GetDiagnosticsText( char *buffer, int size ) const {
@@ -305,7 +325,7 @@ void MobileLightingStage::GetDiagnosticsText( char *buffer, int size ) const {
 		return;
 	}
 	snprintf(buffer, size,
-		"Pipeline: Quest forward ACTIVE | %d eye/view passes\n"
+		"Pipeline: Quest forward | %d multiview + %d eye passes\n"
 		"Forward shader: %s | shadow shader: %s\n"
 		"Scissors: %s\n"
 		"Lighting rectangle area: %.1f%% | culled %d | split %d\n"
@@ -313,7 +333,7 @@ void MobileLightingStage::GetDiagnosticsText( char *buffer, int size ) const {
 		"Shadow builds: %d/frame | shared draws: %d | atlas %d\n"
 		"Shadow cache: %d reused | %d redrawn | no depth copies\n"
 		"Light packets: %d -> %d batches | stereo draws: %d\n",
-		i.eyePasses, i.lighting[0] && i.lighting[0]->IsLinked() ? "LINKED" : "NOT LINKED",
+		i.multiviewPasses, i.eyePasses, i.lighting[0] && i.lighting[0]->IsLinked() ? "LINKED" : "NOT LINKED",
 		i.depth && i.depth->IsLinked() ? "LINKED" : "NOT LINKED",
 		QuestScissorStatus(R_UseQuestLightScissors(), i.fullPixels, i.scissorChecks, i.scissorMismatches),
 		100.0 * double(i.scissorPixels) / std::max(1.0, double(i.fullPixels)), i.culledBatches, i.splitBatches,
@@ -328,13 +348,14 @@ void MobileLightingStage::BeginFrame( const emptyCommand_t *commands ) {
 	impl->culledBatches = impl->splitBatches = 0;
 	impl->scissorPixels = impl->fullPixels = 0;
 	impl->shadowBuilds = impl->eyePasses = impl->scissorChecks = impl->scissorMismatches = 0;
+	impl->multiviewPasses=0;
 	impl->reusedFaces = impl->refreshedFaces = impl->reusedViews = 0;
 	++impl->cacheFrame;
 	if ( !R_UseMobileLighting() || r_skipRender.GetBool() ) return;
 	// A missing/failed program must not leave the depth shader active while
 	// replaying lighting draws, which paints black geometry without lighting.
 	bool linked=impl->depth->EnsureLinked();
-	for(auto *shader:impl->lighting) linked=shader->EnsureLinked() && linked;
+	for(int i=0;i<4;++i) linked=impl->lighting[i]->EnsureLinked() && linked;
 	if ( !linked ) {
 		common->Error("Quest lighting shaders failed to load or compile. See the shader filename and compiler error in the console log.");
 		return;
@@ -725,7 +746,10 @@ void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, ViewPlan &plan
 	GL_Cull(surf->material->GetCullType());
 	vertexCache.VertexPosition(surf->ambientCache);
 	u->modelMatrix.Set(surf->space->modelMatrix);
-	u->modelViewMatrix.Set(surf->space->modelViewMatrix);
+	if(stereo){
+		float matrices[2][16];stereo->ModelViews(surf->space,matrices);
+		u->modelViewMatrix.SetArray(2,matrices[0]);
+	} else u->modelViewMatrix.Set(surf->space->modelViewMatrix);
 	u->vertexColorMode.Set(inter.vertexColor);
 	u->bumpMatrix.SetArray(2, inter.bumpMatrix[0].ToFloatPtr());
 	u->diffuseMatrix.SetArray(2, inter.diffuseMatrix[0].ToFloatPtr());
@@ -805,7 +829,8 @@ void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, ViewPlan &plan
 }
 
 LightingUniforms *MobileLightingStage::Impl::UseLighting(const viewDef_t *view,int count) {
-    const int variant=LightingVariant(count);
+    const int variant=LightingVariant(count)+(stereo?4:0);
+	if(!lighting[variant]->EnsureLinked())common->Error("Quest lighting shader failed to compile or link");
 	lighting[variant]->Activate();
     auto *u=lighting[variant]->GetUniformGroup<LightingUniforms>();
     if(configuredSerial[variant]==drawSerial) return u;
@@ -814,8 +839,13 @@ LightingUniforms *MobileLightingStage::Impl::UseLighting(const viewDef_t *view,i
 	u->projection0.Set(4); u->cube0.Set(5); u->falloff0.Set(6); u->ambientDiffuse0.Set(7); u->ambientSpecular0.Set(8);
 	u->projection1.Set(9); u->cube1.Set(10); u->falloff1.Set(11); u->ambientDiffuse1.Set(12); u->ambientSpecular1.Set(13);
 	u->shadowAtlas.Set(14); u->ssaoTexture.Set(15);
-	u->projectionMatrix.Set(view->projectionMatrix);
-	u->viewOrigin.Set(view->renderView.vieworg);
+	if(stereo){
+		u->projectionMatrix.SetArray(2,stereo->projection[0]);
+		u->viewOrigin.SetArray(2,stereo->origin[0].ToFloatPtr());
+	} else {
+		u->projectionMatrix.Set(view->projectionMatrix);
+		u->viewOrigin.Set(view->renderView.vieworg);
+	}
 	u->clipPlane.Set(view->numClipPlanes ? view->clipPlane[0] : idPlane(0,0,0,0));
 	u->renderResolution.Set(frameBuffers->activeFbo->Width(), frameBuffers->activeFbo->Height());
 	u->ambientParams.Set(r_ambientMinLevel.GetFloat(), view->IsLightGem() ? 1.0f : r_ambientGamma.GetFloat());
@@ -824,7 +854,7 @@ LightingUniforms *MobileLightingStage::Impl::UseLighting(const viewDef_t *view,i
     return u;
 }
 
-void MobileLightingStage::Draw( const viewDef_t *view ) {
+void MobileLightingStage::Draw( const viewDef_t *view, const MobileStereoView *stereo ) {
 	auto it = impl->views.find(view);
 	if ( it == impl->views.end() ) return;
 	if ( !view->IsLightGem() ) ++impl->eyePasses;
@@ -833,16 +863,24 @@ void MobileLightingStage::Draw( const viewDef_t *view ) {
 	frameBuffers->currentRenderFbo->Bind();
 	FB_ApplyViewport();
 	qglEnable(GL_SCISSOR_TEST);
+	impl->stereo=stereo;
     ++impl->drawSerial;
     BindShadowTexture(14);
-    ambientOcclusion->BindSSAOTexture(15);
+	if(stereo){GL_SelectTexture(15);qglBindTexture(GL_TEXTURE_2D_ARRAY,stereo->ssaoTexture);}
+	else ambientOcclusion->BindSSAOTexture(15);
 	qglDisable(GL_STENCIL_TEST);
 	backEnd.currentScissor = view->scissor;
 	FB_ApplyScissor();
 	ViewPlan &plan = it->second;
 	plan.viewport = RB_QuestViewViewport(view);
 	plan.currentScissor = {}; // force the first draw to set actual pixel bounds
-	for ( auto &light : plan.lights ) light.rect = RB_QuestLightScissor(view, light.light, plan.viewport);
+	for ( auto &light : plan.lights ) {
+		if(stereo && R_UseQuestLightScissors() && light.light->frustumTris){
+			light.rect={};const auto &bounds=light.light->frustumTris->bounds;
+			for(int eye=0;eye<2;++eye)light.rect.Add(MobileRenderPlan::ProjectScissor(bounds[0].ToFloatPtr(),bounds[1].ToFloatPtr(),
+				stereo->worldView[eye],stereo->projection[eye],plan.viewport));
+		} else light.rect=RB_QuestLightScissor(view,light.light,plan.viewport);
+	}
 	for ( const Batch &batch : plan.batches ) impl->DrawBatch(view, plan, batch);
 	FB_ApplyScissor();
 	qglEnable(GL_STENCIL_TEST);
@@ -850,4 +888,6 @@ void MobileLightingStage::Draw( const viewDef_t *view ) {
 	GL_Cull(CT_FRONT_SIDED);
 	GL_SelectTexture(0);
 	GLSLProgram::Deactivate();
+	impl->stereo=nullptr;
+	if(stereo){++impl->multiviewPasses;--impl->eyePasses;}
 }
