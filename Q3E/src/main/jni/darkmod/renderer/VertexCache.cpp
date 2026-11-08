@@ -19,6 +19,9 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 
 #include "renderer/tr_local.h"
 #include "renderer/backend/VertexArrayState.h"
+#ifdef TDM_VR_OPENXR
+#include "renderer/vr/OpenXRSpaceWarp.h"
+#endif
 
 const int32 MAX_VERTCACHE_SIZE = INT_MAX;
 
@@ -57,7 +60,11 @@ static void SwitchFrameGeoBufferSet( geoBufferSet_t &gbs ) {
 }
 
 static void AllocGeoBufferSet( geoBufferSet_t &gbs, const int vertexBytes, const int indexBytes ) {
-	gbs.vertexBuffer.InitWriteFrameAhead( GL_ARRAY_BUFFER, vertexBytes, VERTEX_CACHE_ALIGN );
+	bool motionHistory = false;
+#ifdef TDM_VR_OPENXR
+	motionHistory = vr_spaceWarp.GetBool();
+#endif
+	gbs.vertexBuffer.InitWriteFrameAhead( GL_ARRAY_BUFFER, vertexBytes, VERTEX_CACHE_ALIGN, motionHistory );
 	gbs.indexBuffer.InitWriteFrameAhead( GL_ELEMENT_ARRAY_BUFFER, indexBytes, INDEX_CACHE_ALIGN );
 	GL_SetDebugLabel( GL_BUFFER, gbs.vertexBuffer.GetAPIObject(), "DynamicVertexCache" );
 	GL_SetDebugLabel( GL_BUFFER, gbs.indexBuffer.GetAPIObject(), "DynamicIndexCache" );
@@ -223,7 +230,7 @@ void idVertexCache::EndFrame() {
 		}
 	}
 	if ( dynamicData.vertexMemUsed.GetValue() > currentVertexCacheSize ) {
-		while ( currentVertexCacheSize < MAX_VERTCACHE_SIZE / VERTCACHE_NUM_FRAMES / 2 && currentVertexCacheSize < dynamicData.vertexMemUsed.GetValue() ) {
+		while ( currentVertexCacheSize < MAX_VERTCACHE_SIZE / dynamicData.vertexBuffer.FrameCount() / 2 && currentVertexCacheSize < dynamicData.vertexMemUsed.GetValue() ) {
 			currentVertexCacheSize *= 2;
 		}
 	}
@@ -239,6 +246,7 @@ void idVertexCache::EndFrame() {
 		(int)dynamicData.indexBuffer.BytesRemaining() < currentIndexCacheSize
 	) {
 		common->Printf( "Resizing dynamic VertexCache: index %d kb -> %d kb, vertex %d kb -> %d kb\n", dynamicData.indexBuffer.BytesRemaining() / 1024, currentIndexCacheSize / 1024, dynamicData.indexBuffer.BytesRemaining() / 1024, currentVertexCacheSize / 1024 );
+		staticRevision.fetch_add(1, std::memory_order_relaxed);
 		FreeGeoBufferSet( dynamicData );
 		AllocGeoBufferSet( dynamicData, currentVertexCacheSize, currentIndexCacheSize );
 	}

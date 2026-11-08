@@ -49,7 +49,10 @@ static void R_FinishDeform( drawSurf_t *drawSurf, srfTriangles_t *newTri, idDraw
 	// if we are out of vertex cache, leave it the way it is
 	if ( newTri->ambientCache.IsValid() && newTri->indexCache.IsValid() ) {
 		//drawSurf->frontendGeo = newTri;
+		const uint64_t geometry = drawSurf->motionGeometryId, topology = drawSurf->motionTopologyId;
 		drawSurf->CopyGeo( newTri );
+		drawSurf->motionGeometryId = geometry;
+		drawSurf->motionTopologyId = topology;
 	}
 }
 

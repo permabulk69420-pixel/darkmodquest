@@ -117,6 +117,12 @@
         android:text="@string/vr_renderer_diagnostics_label" />
 
     <CheckBox
+        android:id="@+id/vr_spacewarp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/vr_spacewarp_label" />
+
+    <CheckBox
         android:id="@+id/vr_frame_memory"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"

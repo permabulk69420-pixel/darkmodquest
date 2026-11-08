@@ -151,6 +151,8 @@ typedef struct drawSurf_s {
 	const srfTriangles_t	*frontendGeo;			// do not use in the backend; may be modified by the frontend
 	idBounds                geometryBounds;             // frame-safe shadow face culling
 	uint64_t                shadowIndexRevision;        // frame-safe logical index identity
+	uint64_t                motionGeometryId;           // opaque identity only, never dereferenced by backend
+	uint64_t                motionTopologyId;
 	int						numIndexes;				// these four are frame-safe copies for backend use
 	int						numVerts;
 	vertCacheHandle_t		indexCache;				// int				
@@ -173,6 +175,8 @@ typedef struct drawSurf_s {
 		frontendGeo = tri;
 		geometryBounds = tri->bounds;
 		shadowIndexRevision = tri->shadowIndexRevision;
+		motionGeometryId = uint64_t(reinterpret_cast<uintptr_t>(tri));
+		motionTopologyId = tri->shadowIndexRevision;
 		numIndexes = tri->numIndexes;
 		numVerts = tri->numVerts;
 		indexCache = tri->indexCache;

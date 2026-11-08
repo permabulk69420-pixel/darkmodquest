@@ -30,7 +30,8 @@ public:
 	XrGlSwapchain() = default;
 	~XrGlSwapchain();
 
-	bool Create( XrSession session, const char *name, int64_t format, int width, int height );
+	bool Create( XrSession session, const char *name, int64_t format, int width, int height,
+		bool depth = false, uint32_t arraySize = 1 );
 	void Destroy();
 
 	// Acquires the next image and waits until the compositor is done with it.
@@ -40,7 +41,8 @@ public:
 	bool IsAcquired() const { return acquired; }
 
 	FrameBuffer *CurrentFrameBuffer() const;
-	XrSwapchainSubImage CurrentSubImage() const;
+	XrSwapchainSubImage CurrentSubImage( uint32_t layer = 0 ) const;
+	GLuint CurrentTexture() const;
 
 	int Width() const { return width; }
 	int Height() const { return height; }
@@ -49,6 +51,7 @@ private:
 	XrSwapchain swapchain = XR_NULL_HANDLE;
 	int width = 0;
 	int height = 0;
+	uint32_t arraySize = 1;
 	uint32_t currentIndex = 0;
 	bool acquired = false;
 	idList<FrameBuffer *> fbos;

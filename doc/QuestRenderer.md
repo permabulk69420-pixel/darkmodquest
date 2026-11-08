@@ -185,6 +185,73 @@ shading support. These checks do not establish Qualcomm hardware results. Mesa
 multiview image tests cover the unchanged depth, lighting and material handoff.
 Actual Quest rate results, visual quality and FPS gains remain device measurements.
 
+## Application SpaceWarp
+
+The launcher **Application SpaceWarp** checkbox controls `vr_spaceWarp`, defaults
+on and takes effect after restarting the game. The existing Meta OpenXR session,
+tracking, controllers, colour swapchains and separate HUD layer are retained.
+`XR_FB_space_warp` is enabled only when the runtime advertises it and the setting
+is on. `XrSystemSpaceWarpPropertiesFB` supplies the motion/depth dimensions; these
+do not change the eye colour resolution.
+
+`OpenXRSpaceWarp` owns two independent two-layer runtime swapchains: signed
+RGBA16F motion and depth24 (or depth24/stencil8). Independent acquire indices are
+paired correctly. A single GLES multiview pass renders the primary world view
+into both layers. The shader writes **current minus previous NDC XYZ**, with
+high precision clip positions/division, alpha-tested material coverage and the
+current geometry's depth. Clear alpha one marks background for runtime handling;
+rendered vectors have alpha zero. Translucent surfaces are excluded, following
+Meta's guidance. A true infinite-far projection makes the motion depth's
+`nearZ` in metres and `farZ = infinity` agree with the rendered values.
+
+Frame-safe surface identities and previous model matrices track rigid objects.
+Animated surfaces also read the preceding frame's vertex positions. Only the
+dynamic vertex ring grows from three to four regions when SpaceWarp is enabled.
+Its fences cover the later motion-pass reads of the previous region; reusing the
+old three-region/fence scheme would permit frontend overwrites while the GPU
+still reads those vertices. No GPU-to-CPU vertex readback or duplicate animation
+evaluation is added. Index and other GPU buffers retain their ordinary rings.
+Topology changes, gaps and vertex-buffer recreation fall back to current mesh
+positions; camera cuts, time discontinuities and recentering reset history.
+
+Each eye's projection view chains `XrCompositionLayerSpaceWarpInfoFB` with its
+motion/depth array layer and the incremental application-space pose. Body
+locomotion is converted from game axes/units to XR axes/metres; head tracking
+remains in the current/previous eye matrices. First frames and camera cuts use
+`FRAME_SKIP_BIT_FB` to suppress extrapolation. History becomes usable only after
+the corresponding `xrEndFrame` succeeds. Menus/multi-camera composites omit the
+warp chain. Missing extensions, shaders, formats, acquired images or complete
+framebuffers preserve ordinary VR rendering and have explicit diagnostic states.
+
+The existing overlay reports accepted submissions, runtime error codes, motion
+draws, animated history and dimensions. `ACTIVE (runtime accepted)` means the
+layer data was accepted by OpenXR; it is not a measurement of synthesized display
+frames. Physical display Hz is queried separately from application frame period.
+The runtime selects half-rate pacing when the chain is submitted; the engine does
+not fake 72 FPS or manually discard alternate simulation frames. A 72 Hz display
+therefore targets 36 rendered app frames plus synthesized frames when sustainable.
+
+Validation runs the shipping shader, `OpenXRSpaceWarp`, `XrGlSwapchain`, matrix
+multiply, layered attachment helper and the actual backend `xrEndFrame` builder
+against GLES and an OpenXR fixture. It checks signed XYZ vectors, both eyes,
+camera/rigid/deformed motion, physical depth, alpha holes, independent swapchain
+indices, timeout ordering, cuts, resets, failed shaders/acquires/submissions,
+packed-depth fallback and the separate unwarped HUD. A delayed-GPU model tests
+the production buffer implementation with persistent and both nonpersistent
+upload paths, and reproduces the race in the old configuration as a negative
+control. These checks do not emulate the Meta compositor or establish Quest FPS.
+
+Sources: [Meta native Application SpaceWarp guide](https://developers.meta.com/horizon/documentation/native/android/mobile-asw/),
+[Meta GLES XrSpaceWarp sample](https://github.com/meta-quest/Meta-OpenXR-SDK/blob/main/Samples/XrSamples/XrSpaceWarp/Src/XrSpaceWarp.c),
+[Khronos XR_FB_space_warp specification](https://registry.khronos.org/OpenXR/specs/1.1/html/xrspec.html#XR_FB_space_warp).
+
+```bash
+python3 tests/renderer/spacewarp_buffer_test.py
+TDM_OPENXR_HEADERS=/path/to/prefab/modules/headers/include \
+ANDROID_NDK_HOME=/path/to/android-ndk-r23c \
+LIBGL_ALWAYS_SOFTWARE=1 python3 tests/renderer/spacewarp_gles_test.py
+```
+
 ## Frame work
 
 Small frontend allocations use `FrameAllocCache`: each worker reserves a 16 KiB

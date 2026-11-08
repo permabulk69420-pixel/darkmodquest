@@ -84,7 +84,7 @@ public:
  void BindDraw(){if(!fbo&&generator)Bind();glBindFramebuffer(GL_DRAW_FRAMEBUFFER,fbo);}
  void InvalidateDepthStencil();
  void AddArrayLayer(GLuint,GLuint,int);
- void AddMultiviewTextures(GLuint,GLuint,MultiviewAttachment);
+ void AddMultiviewTextures(GLuint,GLuint,MultiviewAttachment,bool packedDepthStencil=true);
  void AddColorRenderTexture(int attachment,idImage *image){Bind();glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0+attachment,GL_TEXTURE_2D,image->texnum,0);}
  void AddDepthRenderTexture(idImage *image){Bind();glFramebufferTexture2D(GL_FRAMEBUFFER,GL_DEPTH_ATTACHMENT,GL_TEXTURE_2D,image->texnum,0);}
 };

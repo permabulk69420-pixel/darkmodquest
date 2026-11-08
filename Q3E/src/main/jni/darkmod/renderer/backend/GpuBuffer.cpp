@@ -25,7 +25,7 @@ idCVar r_gpuBufferNonpersistentUpdateMode(
 
 const int GpuBuffer::NUM_FRAMES;
 
-void GpuBuffer::Init( GLenum type, GLuint size, GLuint alignment ) {
+void GpuBuffer::Init( GLenum type, GLuint size, GLuint alignment, bool retainPreviousFrame ) {
 	if( bufferObject ) {
 		Destroy();
 	}
@@ -33,13 +33,15 @@ void GpuBuffer::Init( GLenum type, GLuint size, GLuint alignment ) {
 	frameSize = ALIGN( size, alignment );
 	this->alignment = alignment;
 	this->type = type;
+	this->retainPreviousFrame = retainPreviousFrame;
+	numFrames = NUM_FRAMES + (retainPreviousFrame ? 1 : 0);
 
 	qglGenBuffers( 1, &bufferObject );
 	qglBindBuffer( type, bufferObject );
 
 	usesPersistentMapping = r_usePersistentMapping && GLAD_GL_ARB_buffer_storage;
 
-	totalSize = NUM_FRAMES * frameSize;
+	totalSize = numFrames * frameSize;
 	if ( usesPersistentMapping ) {
 		qglBufferStorage( type, totalSize, nullptr, GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT );
 		bufferContents = ( byte* )qglMapBufferRange( type, 0, totalSize, GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT );
@@ -53,8 +55,8 @@ void GpuBuffer::Init( GLenum type, GLuint size, GLuint alignment ) {
 	bytesCommittedInCurrentFrame = 0;
 }
 
-void GpuBuffer::InitWriteFrameAhead( GLenum type, GLuint size, GLuint alignment ) {
-	Init( type, size, alignment );
+void GpuBuffer::InitWriteFrameAhead( GLenum type, GLuint size, GLuint alignment, bool retainPreviousFrame ) {
+	Init( type, size, alignment, retainPreviousFrame );
 	currentWritingFrame = 1;
 }
 
@@ -64,7 +66,7 @@ void GpuBuffer::Destroy() {
 		return;
 	}
 
-	for (int i = 0; i < NUM_FRAMES; ++i) {
+	for (int i = 0; i < NUM_FRAMES + 1; ++i) {
 		if ( frameFences[i] != nullptr ) {
 			qglDeleteSync( frameFences[i] );
 			frameFences[i] = nullptr;
@@ -129,12 +131,21 @@ const void * GpuBuffer::BufferOffset( const void *pointer ) {
 }
 
 void GpuBuffer::SwitchFrame() {
+	if (retainPreviousFrame) {
+		// SpaceWarp also reads the preceding frame's animated vertices. Its
+		// original fence predates those reads, so replace it with one covering
+		// this frame's motion pass. A fourth ring region keeps the next frontend
+		// write away from both current and previous GPU inputs.
+		const int previous = (currentDrawingFrame + numFrames - 1) % numFrames;
+		if (frameFences[previous]) qglDeleteSync(frameFences[previous]);
+		frameFences[previous] = qglFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+	}
 	// lock current frame contents in buffer
 	assert( frameFences[currentDrawingFrame] == nullptr );
 	frameFences[currentDrawingFrame] = qglFenceSync( GL_SYNC_GPU_COMMANDS_COMPLETE, 0 );
 
-	currentDrawingFrame = ( currentDrawingFrame + 1 ) % NUM_FRAMES;
-	currentWritingFrame = ( currentWritingFrame + 1 ) % NUM_FRAMES;
+	currentDrawingFrame = ( currentDrawingFrame + 1 ) % numFrames;
+	currentWritingFrame = ( currentWritingFrame + 1 ) % numFrames;
 	bytesCommittedInCurrentFrame = 0;
 
 	if ( frameFences[currentWritingFrame] != nullptr ) {

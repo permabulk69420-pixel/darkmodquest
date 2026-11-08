@@ -6,8 +6,8 @@
 #     (so ordinary pushes do not spend CI minutes)
 #   - manual "Run workflow" (needs this file to exist on the default branch)
 #
-# Simple phone download: Releases -> Quest 3 - Frontend Memory Update.
-# APK filename: TDM-Quest3-Frontend-Memory-Update.apk (also inside the Actions artifact).
+# Simple phone download: Releases -> Quest 3 - Application SpaceWarp.
+# APK filename: TDM-Quest3-Application-SpaceWarp.apk (also inside the Actions artifact).
 
 name: Android APK - TDM only (arm64)
 
@@ -54,6 +54,7 @@ jobs:
         python3 tests/renderer/shader_install_test.py
         python3 tests/renderer/vr_settings_test.py
         python3 tests/renderer/frame_alloc_test.py
+        python3 tests/renderer/spacewarp_buffer_test.py
         python3 tests/renderer/shader_preprocess_test.py
         python3 tests/renderer/multiview_program_test.py
         python3 tests/renderer/gles_loader_test.py
@@ -70,18 +71,21 @@ jobs:
         OFF="$OFF,-DGAME_FTEQW=OFF,-DGAME_URT=OFF,-DGAME_OPENMOHAA=OFF,-DGAME_WOLF3D=OFF,-DGAME_SKINDEEP=OFF"
         OFF="$OFF,-DGAME_QC=OFF,-DGAME_ICARUS=OFF,-DGAME_SERIOUSSAM=OFF,-DGAME_XASH3D=OFF,-DGAME_SOURCE=OFF"
         ./gradlew assembleRelease -Pabifilters=arm64-v8a "-Pcmake_options=$OFF" --no-daemon --stacktrace
+        # Exercise the shipping SpaceWarp shader, motion/history code and
+        # xrEndFrame builder using Mesa plus the APK's actual OpenXR headers.
+        LIBGL_ALWAYS_SOFTWARE=1 python3 tests/renderer/spacewarp_gles_test.py
         df -h /
 
     - name: Collect APK
       run: |
         mkdir -p out
-        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest3-Frontend-Memory-Update.apk"
+        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest3-Application-SpaceWarp.apk"
         ls -la out
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Quest3-Frontend-Memory-Update-APK
+        name: Quest3-Application-SpaceWarp-APK
         path: out/*.apk
         if-no-files-found: error
         retention-days: 30
@@ -91,12 +95,12 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        tag=quest-frontend-memory-update
-        apk=out/TDM-Quest3-Frontend-Memory-Update.apk
-        notes="Quest 3 ARM64 CPU frontend update. Small render-data allocations now come from per-worker 16 KiB reservations, reducing shared atomic-counter contention during parallel model/light preparation. The existing arena size and 128-byte alignment are preserved; frame recycling and debug rewinds invalidate worker caches. Android ARM64 code uses one emulated-TLS lookup, avoiding compiler-generated lookups for each cache field. The launcher setting Scene memory optimization defaults on; switch it off to restore the original shared per-request allocator. The existing renderer diagnostics overlay shows the selected allocator and reserved frame memory. Production allocator tests cover eight-worker isolation, persistent workers across both frame buffers, near-capacity allocation, alignment, resets and data preservation under address/undefined-behavior sanitizers. Repeated allocator-only local timings, including emulated TLS with the pinned NDK compiler, improve; this is not a measured Quest FPS gain. Includes the earlier rendering/foveation fixes and controls. Eye resolution, rendering equations and OpenXR integration are unchanged. Source commit: ${GITHUB_SHA} (branch ${GITHUB_REF_NAME})."
+        tag=quest-application-spacewarp
+        apk=out/TDM-Quest3-Application-SpaceWarp.apk
+        notes="Adds Meta Application SpaceWarp through XR_FB_space_warp on the existing Quest OpenXR/GLES renderer. Application SpaceWarp is enabled by default in launcher settings; switch it off and restart to use ordinary rendering. A single multiview motion pass supplies signed XYZ motion and depth for both eyes, including camera movement, rigid objects, alpha-tested foliage and previous animated vertices. Motion/depth use the runtime-recommended dimensions; eye colour resolution is preserved. GPU vertex history has a fourth ring region and extended fences to prevent overwrite races. Camera cuts, recentering, buffer recreation and rejected frames reset history. The HUD remains a separate unwarped layer. Existing diagnostics show runtime acceptance, motion draws and explicit unsupported/error states. Shader patch version 14 installs the new shaders automatically. Android ARM64 build, production GLES motion/depth and xrEndFrame packet checks, delayed-GPU fence tests, launcher settings and stereo regression checks passed. This does not claim measured Quest FPS or independently verified Meta frame synthesis. SpaceWarp targets half-rate app rendering, such as 36 rendered frames for a 72 Hz display, when the scene can sustain that rate. Source commit: ${GITHUB_SHA} (branch ${GITHUB_REF_NAME})."
         if gh release view "$tag" >/dev/null 2>&1; then
           gh release upload "$tag" "$apk" --clobber
-          gh release edit "$tag" --title "Quest 3 - Frontend Memory Update" --notes "$notes" --latest
+          gh release edit "$tag" --title "Quest 3 - Application SpaceWarp" --notes "$notes" --latest
         else
-          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 - Frontend Memory Update" --notes "$notes" --latest
+          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 - Application SpaceWarp" --notes "$notes" --latest
         fi

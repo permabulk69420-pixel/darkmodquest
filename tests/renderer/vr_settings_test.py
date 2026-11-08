@@ -48,21 +48,22 @@ public class VRSettingsHarness {
         check(defaults.Prop("r_questFramebufferOptimizations").equals("1"),"copy default");
         check(defaults.Prop("r_questMixedPrecision").equals("1"),"precision default");
         check(defaults.Prop("r_frameAllocChunks").equals("1"),"scene memory default");
+        check(defaults.Prop("vr_spaceWarp").equals("1"),"SpaceWarp default");
         check(defaults.Prop("vr_rendererDiagnostics").equals("0"),"overlay default");
         check(defaults.Prop("vr_fog").equals("0"),"fog default");
-        for(int mask=0;mask<32;mask++) {
+        for(int mask=0;mask<64;mask++) {
             SharedPreferences prefs=new SharedPreferences();
             String[] keys={Q3EPreference.pref_vr_framebuffer_optimizations,Q3EPreference.pref_vr_mixed_precision,
-                           Q3EPreference.pref_vr_renderer_diagnostics,Q3EPreference.pref_vr_fog,Q3EPreference.pref_vr_frame_memory};
-            String[] cvars={"r_questFramebufferOptimizations","r_questMixedPrecision","vr_rendererDiagnostics","vr_fog","r_frameAllocChunks"};
-            for(int bit=0;bit<5;bit++)prefs.put(keys[bit],(mask&(1<<bit))!=0);
+                           Q3EPreference.pref_vr_renderer_diagnostics,Q3EPreference.pref_vr_fog,Q3EPreference.pref_vr_frame_memory,Q3EPreference.pref_vr_spacewarp};
+            String[] cvars={"r_questFramebufferOptimizations","r_questMixedPrecision","vr_rendererDiagnostics","vr_fog","r_frameAllocChunks","vr_spaceWarp"};
+            for(int bit=0;bit<6;bit++)prefs.put(keys[bit],(mask&(1<<bit))!=0);
             KidTechCommand cmd=new KidTech4Command(helper.AddVRSettings(prefs,existing));
-            for(int bit=0;bit<5;bit++)
+            for(int bit=0;bit<6;bit++)
                 check(cmd.Prop(cvars[bit]).equals((mask&(1<<bit))!=0?"1":"0"),"checkbox override: "+cvars[bit]);
             check(cmd.Prop("r_volumetricEnable").equals("1"),"independent volumetric setting");
             check(cmd.Prop("vr_resolutionScale").equals("1.0"),"resolution preserved");
         }
-        System.out.println("PASS: production VR preferences override saved command values in all 32 switch combinations; resolution and volumetric lighting preserved");
+        System.out.println("PASS: production VR preferences override saved command values in all 64 switch combinations; resolution and volumetric lighting preserved");
     }
 }
 '''.replace('KEYS', '\n'.join(keys)).replace('MAPPING', mapping)

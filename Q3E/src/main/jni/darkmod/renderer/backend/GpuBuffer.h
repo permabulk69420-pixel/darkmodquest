@@ -35,13 +35,13 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
  */
 class GpuBuffer {
 public:
-	void Init( GLenum type, GLuint size, GLuint alignment );
+	void Init( GLenum type, GLuint size, GLuint alignment, bool retainPreviousFrame = false );
 
 	/// Use this variant when the CPU prepares data one frame ahead (e.g. VertexCache)
 	/// Otherwise, it is assumed that GPU draw calls are issued from the same region
 	/// that was written to in this frame. That's the default for buffers filled and used
 	/// in the backend.
-	void InitWriteFrameAhead( GLenum type, GLuint size, GLuint alignment );
+	void InitWriteFrameAhead( GLenum type, GLuint size, GLuint alignment, bool retainPreviousFrame = false );
 	void Destroy();
 
 	byte *CurrentWriteLocation() const;
@@ -56,11 +56,14 @@ public:
 	void SwitchFrame();
 
 	GLuint GetAPIObject() const { return bufferObject; }
+	int FrameCount() const { return numFrames; }
 
 	static const int NUM_FRAMES = 3;
 
 private:
-	GLsync frameFences[NUM_FRAMES] = { nullptr };
+	GLsync frameFences[NUM_FRAMES + 1] = { nullptr };
+	int numFrames = NUM_FRAMES;
+	bool retainPreviousFrame = false;
 	GLenum type = GL_INVALID_ENUM;
 	GLuint frameSize = 0;
 	GLuint totalSize = 0;

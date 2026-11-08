@@ -45,17 +45,19 @@ XrGlSwapchain::~XrGlSwapchain() {
 	Destroy();
 }
 
-bool XrGlSwapchain::Create( XrSession session, const char *name, int64_t format, int w, int h ) {
+bool XrGlSwapchain::Create( XrSession session, const char *name, int64_t format, int w, int h,
+	bool depth, uint32_t layers ) {
 	Destroy();
 
 	XrSwapchainCreateInfo createInfo = { XR_TYPE_SWAPCHAIN_CREATE_INFO };
-	createInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+	createInfo.usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT |
+		(depth ? XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT);
 	createInfo.format = format;
 	createInfo.sampleCount = 1;
 	createInfo.width = w;
 	createInfo.height = h;
 	createInfo.faceCount = 1;
-	createInfo.arraySize = 1;
+	createInfo.arraySize = layers;
 	createInfo.mipCount = 1;
 	if ( !XR_Check( xrCreateSwapchain( session, &createInfo, &swapchain ), "creating swapchain", XR_NULL_HANDLE ) ) {
 		swapchain = XR_NULL_HANDLE;
@@ -63,6 +65,7 @@ bool XrGlSwapchain::Create( XrSession session, const char *name, int64_t format,
 	}
 	width = w;
 	height = h;
+	arraySize = layers;
 
 	uint32_t imageCount = 0;
 	if ( !XR_Check( xrEnumerateSwapchainImages( swapchain, 0, &imageCount, nullptr ), "counting swapchain images", XR_NULL_HANDLE ) ) {
@@ -85,6 +88,9 @@ bool XrGlSwapchain::Create( XrSession session, const char *name, int64_t format,
 	for ( uint32_t i = 0; i < imageCount; ++i ) {
 		idImage *image = new ExternalGlImage( glImages[i].image, w, h );
 		images.Append( image );
+		// Layered motion/depth swapchains are paired after independent acquire
+		// calls; their current indices are not required to match.
+		if ( layers != 1 || depth ) continue;
 
 		idStr fboName = idStr::Fmt( "%s %d", name, (int)i );
 		// the generator is run lazily the first time the FrameBuffer is bound, and again after every FrameBufferManager::PurgeAll
@@ -119,6 +125,7 @@ void XrGlSwapchain::Destroy() {
 		swapchain = XR_NULL_HANDLE;
 	}
 	width = height = 0;
+	arraySize = 1;
 }
 
 bool XrGlSwapchain::Acquire() {
@@ -136,8 +143,13 @@ bool XrGlSwapchain::Acquire() {
 
 	XrSwapchainImageWaitInfo waitInfo = { XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
 	waitInfo.timeout = 1000000000;	// 1s
-	XrResult result = xrWaitSwapchainImage( swapchain, &waitInfo );
-	if ( !XR_SUCCEEDED( result ) || result == XR_TIMEOUT_EXPIRED ) {
+	XrResult result;
+	do {
+		result = xrWaitSwapchainImage( swapchain, &waitInfo );
+		// A timeout keeps the image acquired but NOT ready. Releasing it here
+		// violates OpenXR call ordering; wait again as in Meta's native sample.
+	} while ( result == XR_TIMEOUT_EXPIRED );
+	if ( !XR_SUCCEEDED( result ) ) {
 		XR_Log( "waiting for swapchain image failed (%d)", (int)result );
 		Release();
 		return false;
@@ -160,14 +172,20 @@ FrameBuffer *XrGlSwapchain::CurrentFrameBuffer() const {
 	return fbos[currentIndex];
 }
 
-XrSwapchainSubImage XrGlSwapchain::CurrentSubImage() const {
+GLuint XrGlSwapchain::CurrentTexture() const {
+	assert(acquired);
+	return images[currentIndex]->texnum;
+}
+
+XrSwapchainSubImage XrGlSwapchain::CurrentSubImage( uint32_t layer ) const {
+	assert(layer < arraySize);
 	XrSwapchainSubImage sub = {};
 	sub.swapchain = swapchain;
 	sub.imageRect.offset.x = 0;
 	sub.imageRect.offset.y = 0;
 	sub.imageRect.extent.width = width;
 	sub.imageRect.extent.height = height;
-	sub.imageArrayIndex = 0;
+	sub.imageArrayIndex = layer;
 	return sub;
 }
 

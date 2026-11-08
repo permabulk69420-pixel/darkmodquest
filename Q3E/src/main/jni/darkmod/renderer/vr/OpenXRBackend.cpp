@@ -49,6 +49,8 @@ OpenXRBackend *vrBackend = &xrBackendInstance;
 #include "framework/GamepadInput.h"
 #include "renderer/vr/xr_common.h"
 #include "renderer/vr/OpenXRSwapchain.h"
+#include "renderer/vr/OpenXRSpaceWarp.h"
+#include "renderer/vr/SpaceWarpMath.h"
 #include "renderer/vr/OpenXRInput.h"
 
 // provided by sys/android
@@ -326,6 +328,11 @@ struct OpenXRBackend::Impl {
 	XrGlSwapchain eyeSwapchains[2];
 	XrGlSwapchain uiSwapchain;
 	MobileMultiviewTargets multiview;
+	OpenXRSpaceWarp spaceWarp;
+	bool hasSpaceWarp = false;
+	int motionWidth = 0, motionHeight = 0;
+	XrTime warpResetTime = 0;
+	float displayRefreshHz = 0;
 
 	// pose data
 	XrView renderViews[2];			// poses of the frame being rendered
@@ -358,6 +365,7 @@ struct OpenXRBackend::Impl {
 	bool hasThreadSettings = false;
 	PFN_xrEnumerateDisplayRefreshRatesFB pfnEnumerateRefreshRates = nullptr;
 	PFN_xrRequestDisplayRefreshRateFB pfnRequestRefreshRate = nullptr;
+	PFN_xrGetDisplayRefreshRateFB pfnGetRefreshRate = nullptr;
 	PFN_xrPerfSettingsSetPerformanceLevelEXT pfnSetPerfLevel = nullptr;
 	PFN_xrSetAndroidApplicationThreadKHR pfnSetAppThread = nullptr;
 
@@ -384,6 +392,7 @@ struct OpenXRBackend::Impl {
 	enum Pass { PASS_LEFT = 0, PASS_RIGHT = 1, PASS_UI = 2 };
 	void ExecutePass( const frameData_t *fd, Pass pass, FrameBuffer *target );
 	void ExecuteMultiview( const frameData_t *fd );
+	void RenderSpaceWarp( const frameData_t *fd );
 	void UpdateViewForEye( viewDef_t *vd, int eye, bool updateEntities = true );
 	void UpdateViewsForEye( const emptyCommand_t *cmds, int eye );
 	void RepositionView( viewDef_t *vd, int eye, bool updateEntities = true );
@@ -455,6 +464,10 @@ bool OpenXRBackend::Impl::CreateInstance() {
 	if ( hasRefreshRate ) {
 		enabled.push_back( XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME );
 	}
+	hasSpaceWarp = hasExtension( XR_FB_SPACE_WARP_EXTENSION_NAME );
+	if ( hasSpaceWarp && vr_spaceWarp.GetBool() ) {
+		enabled.push_back( XR_FB_SPACE_WARP_EXTENSION_NAME );
+	}
 	hasPerfSettings = hasExtension( XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME );
 	if ( hasPerfSettings ) {
 		enabled.push_back( XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME );
@@ -496,13 +509,18 @@ bool OpenXRBackend::Impl::CreateInstance() {
 		return false;
 	}
 	XrSystemProperties sysProps = { XR_TYPE_SYSTEM_PROPERTIES };
+	XrSystemSpaceWarpPropertiesFB warpProps = { XR_TYPE_SYSTEM_SPACE_WARP_PROPERTIES_FB };
+	if ( hasSpaceWarp && vr_spaceWarp.GetBool() ) sysProps.next = &warpProps;
 	if ( XR_SUCCEEDED( xrGetSystemProperties( instance, systemId, &sysProps ) ) ) {
 		XR_Log( "system: %s", sysProps.systemName );
+		motionWidth = warpProps.recommendedMotionVectorImageRectWidth;
+		motionHeight = warpProps.recommendedMotionVectorImageRectHeight;
 	}
 
 	// extension functions are not exported by the loader
 	xrGetInstanceProcAddr( instance, "xrEnumerateDisplayRefreshRatesFB", reinterpret_cast<PFN_xrVoidFunction *>( &pfnEnumerateRefreshRates ) );
 	xrGetInstanceProcAddr( instance, "xrRequestDisplayRefreshRateFB", reinterpret_cast<PFN_xrVoidFunction *>( &pfnRequestRefreshRate ) );
+	xrGetInstanceProcAddr( instance, "xrGetDisplayRefreshRateFB", reinterpret_cast<PFN_xrVoidFunction *>( &pfnGetRefreshRate ) );
 	xrGetInstanceProcAddr( instance, "xrPerfSettingsSetPerformanceLevelEXT", reinterpret_cast<PFN_xrVoidFunction *>( &pfnSetPerfLevel ) );
 	xrGetInstanceProcAddr( instance, "xrSetAndroidApplicationThreadKHR", reinterpret_cast<PFN_xrVoidFunction *>( &pfnSetAppThread ) );
 	return true;
@@ -620,6 +638,10 @@ bool OpenXRBackend::Impl::CreateSwapchains() {
 		 !uiSwapchain.Create( session, "xr ui", swapchainFormat, UI_WIDTH, UI_HEIGHT ) ) {
 		return false;
 	}
+	if ( vr_spaceWarp.GetBool() && hasSpaceWarp ) {
+		// Failure disables only SpaceWarp, preserving the working VR session.
+		spaceWarp.Initialize(session,motionWidth,motionHeight,formats.data(),formatCount);
+	}
 
 	// The renderer sizes its main framebuffers from the "video size". Make it match the eye buffers.
 	glConfig.vidWidth = eyeWidth;
@@ -648,6 +670,7 @@ bool OpenXRBackend::Impl::Initialize() {
 }
 
 void OpenXRBackend::Impl::Shutdown() {
+	spaceWarp.Shutdown();
 	multiview.Shutdown();
 	timer.Shutdown();
 	input.Destroy();
@@ -682,6 +705,8 @@ Session
 =============================================================================================
 */
 void OpenXRBackend::Impl::OnSessionBegun() {
+	spaceWarp.ResetHistory();
+	warpResetTime = 0;
 	if ( vr_displayRefreshRate.GetInteger() > 0 && hasRefreshRate && pfnRequestRefreshRate && pfnEnumerateRefreshRates ) {
 		uint32_t count = 0;
 		pfnEnumerateRefreshRates( session, 0, &count, nullptr );
@@ -704,6 +729,7 @@ void OpenXRBackend::Impl::OnSessionBegun() {
 		pfnSetPerfLevel( session, XR_PERF_SETTINGS_DOMAIN_CPU_EXT, XR_PERF_SETTINGS_LEVEL_SUSTAINED_HIGH_EXT );
 		pfnSetPerfLevel( session, XR_PERF_SETTINGS_DOMAIN_GPU_EXT, XR_PERF_SETTINGS_LEVEL_SUSTAINED_HIGH_EXT );
 	}
+	if ( hasRefreshRate && pfnGetRefreshRate ) pfnGetRefreshRate(session,&displayRefreshHz);
 	if ( hasThreadSettings && pfnSetAppThread ) {
 		// this is the thread that owns the GL context and submits frames
 		pfnSetAppThread( session, XR_ANDROID_THREAD_TYPE_RENDERER_MAIN_KHR, (uint32_t)gettid() );
@@ -726,6 +752,7 @@ void OpenXRBackend::Impl::OnSessionStateChanged( const XrEventDataSessionStateCh
 		break;
 	}
 	case XR_SESSION_STATE_STOPPING:
+		spaceWarp.ResetHistory();
 		sessionRunning = false;
 		haveRenderViews = havePredictedViews = false;
 		predictedDisplayTime = 0;
@@ -749,12 +776,17 @@ void OpenXRBackend::Impl::HandleEvents() {
 			break;
 		}
 		switch ( event.type ) {
+		case XR_TYPE_EVENT_DATA_DISPLAY_REFRESH_RATE_CHANGED_FB:
+			displayRefreshHz = reinterpret_cast<XrEventDataDisplayRefreshRateChangedFB *>(&event)->toDisplayRefreshRate;
+			break;
 		case XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED:
 			OnSessionStateChanged( *reinterpret_cast<XrEventDataSessionStateChanged *>( &event ) );
 			break;
 		case XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING: {
 			const XrEventDataReferenceSpaceChangePending &change = *reinterpret_cast<XrEventDataReferenceSpaceChangePending *>( &event );
 			if ( change.referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL ) {
+				spaceWarp.ResetHistory();
+				warpResetTime = change.changeTime;
 				XR_Log( "the headset was recentered" );
 				recenterPending = true;
 				recenterTime = change.changeTime;
@@ -864,6 +896,7 @@ void OpenXRBackend::Impl::EndFrame( bool submitLayers, bool hasWorldView ) {
 		{ XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW },
 	};
 	XrCompositionLayerProjection projectionLayer = { XR_TYPE_COMPOSITION_LAYER_PROJECTION };
+	XrCompositionLayerSpaceWarpInfoFB warpViews[2] = {};
 	XrCompositionLayerQuad uiLayer = { XR_TYPE_COMPOSITION_LAYER_QUAD };
 	const XrCompositionLayerBaseHeader *layers[2];
 	uint32_t layerCount = 0;
@@ -874,6 +907,7 @@ void OpenXRBackend::Impl::EndFrame( bool submitLayers, bool hasWorldView ) {
 			projectionViews[eye].fov = renderViews[eye].fov;
 			projectionViews[eye].subImage = eyeSwapchains[eye].CurrentSubImage();
 		}
+		if ( hasWorldView ) spaceWarp.Chain(projectionViews,warpViews);
 		projectionLayer.layerFlags = 0;
 		projectionLayer.space = localSpace;
 		projectionLayer.viewCount = 2;
@@ -933,7 +967,9 @@ void OpenXRBackend::Impl::EndFrame( bool submitLayers, bool hasWorldView ) {
 	endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
 	endInfo.layerCount = layerCount;
 	endInfo.layers = layers;
-	XR_Check( xrEndFrame( session, &endInfo ), "submitting the frame", instance );
+	const XrResult result = xrEndFrame( session, &endInfo );
+	XR_Check(result, "submitting the frame", instance);
+	spaceWarp.CompleteFrame(submitLayers && hasWorldView,result);
 }
 
 /*
@@ -1273,7 +1309,42 @@ void OpenXRBackend::Impl::ExecutePass( const frameData_t *fd, Pass pass, FrameBu
 	backEnd.glState.tmu[0].current2DMap = -1;
 }
 
+void OpenXRBackend::Impl::RenderSpaceWarp( const frameData_t *fd ) {
+	if ( !vr_spaceWarp.GetBool() || !hasSpaceWarp || fd->render2D || r_skipRender.GetBool() || r_skipRenderContext.GetBool() ) return;
+	if ( warpResetTime && predictedDisplayTime>=warpResetTime ) {
+		spaceWarp.ResetHistory();warpResetTime=0;
+	}
+	viewDef_t *main = nullptr;
+	for ( const emptyCommand_t *cmd=fd->cmdHead;cmd;cmd=NextCommand(cmd) ) {
+		if ( cmd->commandId!=RC_DRAW_VIEW ) continue;
+		auto *view=const_cast<viewDef_t *>(((const drawSurfsCommand_t *)cmd)->viewDef);
+		if ( !IsWorldView(view) || view->IsLightGem() || view->isSubview || view->isPortalSky || view->isMirrorGen ||
+			view->renderView.viewID!=VID_PLAYER_VIEW || view->renderView.fixedOrigin ) continue;
+		if ( main && main!=view ) return; // A multi-camera composite has no single motion/depth space.
+		main=view;
+	}
+	if ( !main ) return;
+	MobileStereoView stereo;
+	for ( int eye=0;eye<2;++eye ) {
+		UpdateViewForEye(main,eye,false);
+		memcpy(stereo.projection[eye],main->projectionMatrix,sizeof(stereo.projection[eye]));
+		memcpy(stereo.worldView[eye],main->worldSpace.modelViewMatrix,sizeof(stereo.worldView[eye]));
+		stereo.origin[eye]=main->renderView.vieworg;
+	}
+	// XR tracking-space pose in game world, expressed back in XR axes/metres.
+	// Head tracking is already present in the eye matrices; this pose records
+	// only application locomotion for the compositor's background reprojection.
+	const auto &rv=main->renderView;
+	const idQuat q=rv.initialViewaxis.ToQuat();
+	const XrPosef appPose=SpaceWarpMath::FromGameSpace(rv.initialVieworg.ToFloatPtr(),q.ToFloatPtr(),XR_GameUnitsToMetres);
+	const float nearMetres=r_znear.GetFloat()*(rv.cramZNear?0.25f:1.0f)*XR_GameUnitsToMetres;
+	const viewDef_t *savedView=backEnd.viewDef;backEnd.viewDef=main;
+	spaceWarp.Render(main,stereo,appPose,predictedDisplayTime,nearMetres);
+	backEnd.viewDef=savedView;
+}
+
 void OpenXRBackend::Impl::RenderFrame( const frameData_t *fd ) {
+	spaceWarp.BeginFrame();
 	if ( !BeginFrame() ) {
 		return;
 	}
@@ -1319,6 +1390,7 @@ void OpenXRBackend::Impl::RenderFrame( const frameData_t *fd ) {
 				ExecutePass( fd, PASS_LEFT, eyeSwapchains[0].CurrentFrameBuffer() );
 				ExecutePass( fd, PASS_RIGHT, eyeSwapchains[1].CurrentFrameBuffer() );
 			}
+			RenderSpaceWarp(fd);
 			ExecutePass( fd, PASS_UI, uiSwapchain.CurrentFrameBuffer() );
 			if ( vr_rendererDiagnostics.GetBool() ) UpdateDiagnostics(fd);
 			renderBackend->FinishStereoFrame();
@@ -1400,11 +1472,12 @@ void OpenXRBackend::Impl::UpdateDiagnostics( const frameData_t *fd ) {
 	const bool volumes = cvarSystem->GetCVarBool("r_volumetricEnable");
 	char foveation[200];
 	renderBackend->MobileLighting().GetFoveationDiagnostics(foveation,sizeof(foveation));
+	char warp[320];spaceWarp.GetDiagnostics(warp,sizeof(warp),hasSpaceWarp);
 	char text[4096];
 	snprintf(text, sizeof(text),
 		"RENDERER DIAGNOSTICS | last completed frame %u\n"
 		"OpenXR ACTIVE | stereo 2 eyes | %dx%d | %.1f Hz\n"
-		"%s\n%s"
+		"%s\n%s%s"
 		"CPU ms: game %d | frontend %d | XR wait %.1f | SMP %s\n"
 		"Render CPU ms: prep %.1f | depth %.1f | light %.1f\n"
 		"Frame allocation: %s | reserved %d KiB\n"
@@ -1421,8 +1494,8 @@ void OpenXRBackend::Impl::UpdateDiagnostics( const frameData_t *fd ) {
 		"%s"
 		"Shadows setting: %s | soft filter: %s\n"
 		"MSAA samples: %d (requested %d) | HDR buffer: %d-bit\n",
-		++diagnosticsFrame, eyeWidth, eyeHeight, displayPeriod > 0 ? 1e9 / double(displayPeriod) : 0.0,
-		timing, mobile,
+		++diagnosticsFrame, eyeWidth, eyeHeight, displayRefreshHz>0?displayRefreshHz:displayPeriod>0?1e9/double(displayPeriod):0.0,
+		timing, mobile, warp,
 		fd->questGameMsec, fd->questFrontendMsec, timer.WaitMs(), com_smp.GetBool() ? "ON" : "OFF",
 		c.prepareCpuMs, c.depthCpuMs, c.lightingCpuMs,
 		cvarSystem->GetCVarBool("r_frameAllocChunks")?"PER-WORKER 16 KiB":"SHARED per request",

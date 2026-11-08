@@ -11,6 +11,7 @@ ENGINE = ROOT / 'Q3E/src/main/jni/darkmod'
 UNIFORMS = r'''
 #pragma once
 #include <cassert>
+#include <cstdint>
 #include <cstring>
 #include <vector>
 using GLfloat=float;using GLint=int;const int GL_FALSE=0;
@@ -112,6 +113,7 @@ struct idMaterial{bool fog=false,blend=false;bool IsFogLight()const{return fog;}
 struct drawSurf_s{
  const drawSurf_s *mobileCanonical=nullptr;const srfTriangles_t *frontendGeo=nullptr;
  int geometryBounds=0,numVerts=0,numIndexes=0;unsigned shadowIndexRevision=0;
+ uint64_t motionGeometryId=0,motionTopologyId=0;
  Handle ambientCache,indexCache,shadowCache;
  const viewEntity_s *space=nullptr;const idMaterial *material=nullptr;
  const float *shaderRegisters=nullptr;drawSurf_s *nextOnLight=nullptr;int dsFlags=0;
@@ -145,6 +147,8 @@ void meshTests(){
   interaction.PrepareLightSurf(link,&clipped,&space,&material,scissor,true,true);return interaction.surfsToLink[link];
  };
  auto *first=prepare();assert(first->numIndexes==6&&first->indexCache.id==20&&first->mobileCanonical);
+ assert(first->motionGeometryId==uintptr_t(&clipped)&&first->motionTopologyId==clipped.shadowIndexRevision);
+ assert(first->mobileCanonical->motionGeometryId==uintptr_t(&source));
  assert(first->mobileCanonical->numIndexes==12&&first->mobileCanonical->indexCache.id==10);
  assert(first->mobileCanonical->space==&space&&first->mobileCanonical->material==&material);
  assert(first->mobileCanonical->shaderRegisters==shaderRegisters&&first->mobileCanonical->dsFlags==3);

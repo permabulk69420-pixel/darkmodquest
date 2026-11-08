@@ -105,10 +105,10 @@ void FrameBuffer::InvalidateDepthStencil() {
 #endif
 }
 
-void FrameBuffer::AddMultiviewTextures(GLuint color, GLuint depthStencil, MultiviewAttachment attach) {
+void FrameBuffer::AddMultiviewTextures(GLuint color, GLuint depthStencil, MultiviewAttachment attach, bool packedDepthStencil) {
 	Bind();
 	attach(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,color,0,0,2);
-	attach(GL_FRAMEBUFFER,GL_DEPTH_STENCIL_ATTACHMENT,depthStencil,0,0,2);
+	attach(GL_FRAMEBUFFER,packedDepthStencil ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT,depthStencil,0,0,2);
 }
 
 void FrameBuffer::AddDepthStencilRenderBuffer( GLenum format ) {

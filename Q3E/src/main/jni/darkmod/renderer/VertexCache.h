@@ -69,6 +69,14 @@ public:
 	// the cached data is no longer valid
 	void			PurgeAll();
 	uint64_t StaticRevision() const { return staticRevision.load(std::memory_order_relaxed); }
+	// Backend-only access for a separate motion-vector VAO. Previous dynamic
+	// vertices remain in the three-frame ring; never read mutable frontend data.
+	GLuint VertexBuffer(vertCacheHandle_t handle) const {
+		return handle.isStatic ? staticVertexBuffer : dynamicData.vertexBuffer.GetAPIObject();
+	}
+	GLuint IndexBuffer(vertCacheHandle_t handle) const {
+		return handle.isStatic ? staticIndexBuffer : dynamicData.indexBuffer.GetAPIObject();
+	}
 
 	// will be an int offset cast to a pointer of ARB_vertex_buffer_object
 	void			VertexPosition( vertCacheHandle_t handle, attribBind_t attrib = attribBind_t::ATTRIB_REGULAR );

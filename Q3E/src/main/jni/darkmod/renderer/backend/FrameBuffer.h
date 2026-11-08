@@ -34,7 +34,7 @@ public:
 	void AddStencilRenderTexture(idImage *texture);
 	void AddArrayLayer(GLuint color, GLuint depthStencil, int layer);
 	using MultiviewAttachment = void (*)(GLenum, GLenum, GLuint, GLint, GLint, GLsizei);
-	void AddMultiviewTextures(GLuint color, GLuint depthStencil, MultiviewAttachment attach);
+	void AddMultiviewTextures(GLuint color, GLuint depthStencil, MultiviewAttachment attach, bool packedDepthStencil = true);
 
 	void Validate();
 

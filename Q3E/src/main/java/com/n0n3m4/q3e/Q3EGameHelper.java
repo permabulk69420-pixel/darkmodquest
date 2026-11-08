@@ -493,6 +493,7 @@ class Q3EGameHelper
         command.SetProp("r_questFramebufferOptimizations", preferences.getBoolean(Q3EPreference.pref_vr_framebuffer_optimizations, true) ? "1" : "0");
         command.SetProp("r_questMixedPrecision", preferences.getBoolean(Q3EPreference.pref_vr_mixed_precision, true) ? "1" : "0");
         command.SetProp("r_frameAllocChunks", preferences.getBoolean(Q3EPreference.pref_vr_frame_memory, true) ? "1" : "0");
+        command.SetProp("vr_spaceWarp", preferences.getBoolean(Q3EPreference.pref_vr_spacewarp, true) ? "1" : "0");
         if(preferences.contains(Q3EPreference.pref_vr_hud_height))
             command.SetProp("vr_uiOverlayHeight", String.valueOf(preferences.getInt(Q3EPreference.pref_vr_hud_height, 180) / 100.0f));
         if(preferences.contains(Q3EPreference.pref_vr_hud_distance))
