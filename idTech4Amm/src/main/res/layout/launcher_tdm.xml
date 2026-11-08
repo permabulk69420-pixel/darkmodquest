@@ -123,6 +123,24 @@
         android:text="@string/vr_spacewarp_label" />
 
     <CheckBox
+        android:id="@+id/vr_shadow_early_reject"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/vr_shadow_early_reject_label" />
+
+    <CheckBox
+        android:id="@+id/vr_buffer_streaming"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/vr_buffer_streaming_label" />
+
+    <CheckBox
+        android:id="@+id/vr_shadow_batching"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/vr_shadow_batching_label" />
+
+    <CheckBox
         android:id="@+id/vr_frame_memory"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"

@@ -3,6 +3,7 @@
 #include "renderer/backend/stages/MobileLightingStage.h"
 #include "renderer/backend/MobileRenderPlan.h"
 #include "renderer/backend/MobileShadowCache.h"
+#include "renderer/backend/MobileShadowBatch.h"
 #include "renderer/backend/stages/InteractionStage.h"
 #include "renderer/backend/stages/AmbientOcclusionStage.h"
 #include "renderer/backend/GLSLProgramManager.h"
@@ -44,6 +45,10 @@ idCVar r_questLightScissor( "r_questLightScissor", "1", CVAR_RENDERER | CVAR_BOO
 	"Clip mobile lighting, blend lights and volumetrics to bounds projected for the active eye" );
 idCVar r_questShadowCache( "r_questShadowCache", "1", CVAR_RENDERER | CVAR_BOOL | CVAR_ARCHIVE,
 	"Retain unchanged shadow faces across frames; update changed static and dynamic casters immediately" );
+idCVar r_questShadowBatching("r_questShadowBatching", "1", CVAR_RENDERER | CVAR_BOOL,
+	"Merge stable compatible opaque shadow casters into cached indexed draws; set in launcher");
+idCVar r_questShadowEarlyReject("r_questShadowEarlyReject", "1", CVAR_RENDERER | CVAR_BOOL,
+	"Reject fully shadowed non-parallax direct lights before BRDF work; set in launcher");
 idCVar vr_fog( "vr_fog", "0", CVAR_RENDERER | CVAR_BOOL | CVAR_ARCHIVE,
 	"Enable atmospheric fog lights, particles and sheets in VR. Off by default. Volumetric lighting is controlled separately." );
 
@@ -107,6 +112,7 @@ struct LightingUniforms : GLSLUniformGroup {
 	DEFINE_MOBILE_UNIFORM( vec2, ambientParams )
 	DEFINE_MOBILE_UNIFORM( int, lightCount )
 	DEFINE_MOBILE_UNIFORM( int, shadowFilter )
+	DEFINE_MOBILE_UNIFORM( int, earlyShadowReject )
 	DEFINE_MOBILE_UNIFORM( int, flags )
 	DEFINE_MOBILE_UNIFORM( int, vertexColorMode )
 	DEFINE_MOBILE_UNIFORM( vec4, bumpMatrix )
@@ -181,6 +187,9 @@ struct Shadow {
 	struct Face {
 		std::vector<const drawSurf_t *> casters;
 		MobileShadowCache::Signature content;
+		std::vector<MobileShadowBatch::Source> batchSources;
+		std::vector<MobileShadowBatch::Draw> batches;
+		std::vector<unsigned char> batchedCasters;
 	};
 	std::array<Face, 12> faces;
 };
@@ -237,6 +246,7 @@ void Bind( int unit, idImage *image ) { image->BindToUnit(unit); }
 
 struct MobileLightingStage::Impl {
 	MobileFoveation foveation;
+	MobileShadowBatch::Cache shadowBatches;
 	GLSLProgram *lighting[12] = {}, *depth = nullptr;
 	uint64_t drawSerial = 0, configuredSerial[12] = {};
 	uint64_t multiviewCheckedGeneration[4] = {};
@@ -260,6 +270,7 @@ struct MobileLightingStage::Impl {
 	std::unordered_map<const viewLight_t *, size_t> shadowIndex;
 	std::vector<Shadow> shadows;
 	int packets = 0, batches = 0, shadowDraws = 0, eyeDraws = 0, frames = 0;
+	int earlyRejectDraws = 0;
 	int culledBatches = 0;
 	int splitBatches = 0;
 	long long scissorPixels = 0, fullPixels = 0;
@@ -268,9 +279,10 @@ struct MobileLightingStage::Impl {
 
 	void Collect( const viewDef_t *view );
 	void PlanShadows();
-	bool DescribeCaster( const drawSurf_t *surf, const viewLight_t *light, MobileShadowCache::Signature &content );
+	bool DescribeCaster( const drawSurf_t *surf, const viewLight_t *light, MobileShadowCache::Signature &content, bool &cacheable );
 	void DrawShadows();
 	void DrawCaster( const drawSurf_t *surf, ShadowUniforms *u );
+	void DrawShadowBatch(const MobileShadowBatch::Draw &batch, ShadowUniforms *u);
 	void DrawBatch( const viewDef_t *view, ViewPlan &plan, const Batch &batch );
 	LightingUniforms *UseLighting(const viewDef_t *view,int count);
 	bool ShadowInfo( const viewLight_t *light, bool local, idVec4 &page, idVec4 &params, float projection[16] ) const;
@@ -297,6 +309,7 @@ void MobileLightingStage::Init() {
 void MobileLightingStage::Shutdown() {
 	EndFrame();
 	impl->foveation.Shutdown();
+	impl->shadowBatches.Clear();
 	if ( impl->fbo ) impl->fbo->Destroy();
 	if ( impl->atlas ) impl->atlas->PurgeImage();
 	impl->shadowCache.clear();impl->layout.Clear();
@@ -372,12 +385,15 @@ void MobileLightingStage::GetDiagnosticsText( char *buffer, int size ) const {
 		"Scissor GL samples: %d | mismatches: %d\n"
 		"Shadow builds: %d/frame | shared draws: %d | atlas %d\n"
 		"Shadow cache: %d reused | %d redrawn | no depth copies\n"
+		"Shadow merging: %s | %u draws -> %u | warm %u | upload %u KiB\n"
+		"Blocked-light rejection: %s | eligible scene draws %d\n"
 		"Light packets: %d -> %d batches | stereo draws: %d\n",
 		i.multiviewPasses, i.eyePasses, i.lighting[0] && i.lighting[0]->IsLinked() ? "LINKED" : "NOT LINKED",
 		i.depth && i.depth->IsLinked() ? "LINKED" : "NOT LINKED",
 		QuestScissorStatus(R_UseQuestLightScissors(), i.fullPixels, i.scissorChecks, i.scissorMismatches),
 		100.0 * double(i.scissorPixels) / std::max(1.0, double(i.fullPixels)), i.culledBatches, i.splitBatches,
 		i.scissorChecks, i.scissorMismatches, i.shadowBuilds, i.shadowDraws, i.atlasSize, i.reusedFaces, i.refreshedFaces,
+		r_questShadowBatching.GetBool()?"ON":"OFF", i.shadowBatches.sourceDraws, i.shadowBatches.batchDraws, i.shadowBatches.hits, i.shadowBatches.uploadedBytes/1024, r_questShadowEarlyReject.GetBool()?"ON":"OFF", i.earlyRejectDraws,
 		i.packets, i.batches, i.eyeDraws);
 }
 
@@ -386,6 +402,7 @@ void MobileLightingStage::BeginFrame( const emptyCommand_t *commands ) {
 	EndFrame();
 	impl->foveation.BeginFrame();
 	impl->packets = impl->batches = impl->shadowDraws = impl->eyeDraws = 0;
+	impl->earlyRejectDraws = 0;
 	impl->culledBatches = impl->splitBatches = 0;
 	impl->scissorPixels = impl->fullPixels = 0;
 	impl->shadowBuilds = impl->eyePasses = impl->scissorChecks = impl->scissorMismatches = 0;
@@ -452,6 +469,21 @@ void MobileLightingStage::BeginFrame( const emptyCommand_t *commands ) {
 	for ( auto it = impl->shadowCache.begin(); it != impl->shadowCache.end(); )
 		if ( !impl->layout.slots.count(it->first) ) it = impl->shadowCache.erase(it); else ++it;
 	for ( size_t i = 0; i < pages.size(); ++i ) impl->shadows[i].page = pages[i];
+	// All index assembly/uploads precede the single depth-atlas render pass.
+	// Keep CPU staging reads and buffer uploads outside its tile rendering.
+	impl->shadowBatches.BeginFrame(r_questShadowBatching.GetBool(),vertexCache.StaticRevision(),impl->cacheFrame);
+	for (Shadow &shadow : impl->shadows) {
+		auto cached = impl->shadowCache.find(shadow.cacheKey);
+		for (int face = 0; face < 12; ++face) {
+			auto &job = shadow.faces[face];
+			if (r_questShadowCache.GetBool() && cached != impl->shadowCache.end() && !cached->second.faces[face].FinalDirty(job.content)) continue;
+			job.batches = impl->shadowBatches.Prepare(shadow.cacheKey,face,job.batchSources);
+			if (!job.batches.empty()) {
+				job.batchedCasters.assign(job.casters.size(),0);
+				for (const auto &batch : job.batches) for (unsigned slot : batch.slots) job.batchedCasters[slot]=1;
+			}
+		}
+	}
 	impl->DrawShadows();
 	impl->shadowBuilds = impl->refreshedFaces ? 1 : 0;
 }
@@ -526,7 +558,8 @@ void MobileLightingStage::Impl::Collect( const viewDef_t *view ) {
 	}
 }
 
-bool MobileLightingStage::Impl::DescribeCaster( const drawSurf_t *surf, const viewLight_t *light, MobileShadowCache::Signature &content ) {
+bool MobileLightingStage::Impl::DescribeCaster( const drawSurf_t *surf, const viewLight_t *light, MobileShadowCache::Signature &content, bool &cacheable ) {
+	cacheable = false;
 	if ( !surf->numIndexes || !surf->ambientCache.IsValid() || !surf->indexCache.IsValid() ) return false;
 	if ( auto stage = surf->material->GetParallaxStage() ) if ( stage->parallax->offsetExternalShadows ) return false;
 	MobileShadowCache::Signature key;
@@ -570,6 +603,7 @@ bool MobileLightingStage::Impl::DescribeCaster( const drawSurf_t *surf, const vi
 		}
 	}
 	if ( !canCache ) content.Add(cacheFrame); // dynamic buffers/images must never reuse old depth
+	cacheable = canCache;
 	return true;
 }
 
@@ -591,7 +625,19 @@ void MobileLightingStage::Impl::PlanShadows() {
 			const drawSurf_t *first = local ? s.light->localShadows : s.light->globalShadows;
 			for ( const drawSurf_t *surf = first; surf; surf = surf->nextOnLight ) {
 				Signature content;
-				if ( !DescribeCaster(surf,s.light,content) ) continue;
+				bool cacheable;
+				if ( !DescribeCaster(surf,s.light,content,cacheable) ) continue;
+				MobileShadowBatch::Source source;
+				if (r_questShadowBatching.GetBool() && sizeof(glIndex_t)==sizeof(uint32_t) && cacheable && surf->material->Coverage() == MC_OPAQUE &&
+					surf->ambientCache.offset % sizeof(idDrawVert) == 0) {
+					source.indexes = reinterpret_cast<const uint32_t *>(vertexCache.ReadSubmittedIndexes(surf->indexCache,surf->numIndexes));
+					if (source.indexes) {
+						source.surface=surf; source.count=surf->numIndexes; source.vertices=surf->numVerts;
+						source.baseVertex=surf->ambientCache.offset/sizeof(idDrawVert);
+						source.vertexBuffer=vertexCache.VertexBuffer(surf->ambientCache);
+						source.modelMatrix=surf->space->modelMatrix; source.content=content;
+					}
+				}
 				unsigned mask = 63;
 				if ( !s.light->mobileParallel && !surf->geometryBounds.IsCleared() ) {
 					idVec3 corners[8];surf->geometryBounds.ToPoints(corners);
@@ -606,6 +652,10 @@ void MobileLightingStage::Impl::PlanShadows() {
 					if ( !(mask & (1u<<face)) ) continue;
 					const int index = local*6+face;
 					s.faces[index].casters.push_back(surf);casters[index].Add(content);
+					if (source.surface) {
+						source.slot=unsigned(s.faces[index].casters.size()-1);
+						s.faces[index].batchSources.push_back(source);
+					}
 				}
 			}
 		}
@@ -701,13 +751,31 @@ void MobileLightingStage::Impl::DrawShadows() {
                 const int x=s.page.x+(face%3)*s.page.size,y=s.page.y+(face/3+2*local)*s.page.size;
                 qglViewport(x,y,s.page.size,s.page.size);qglScissor(x,y,s.page.size,s.page.size);
                 qglClear(GL_DEPTH_BUFFER_BIT);u->face.Set(face);
-                for(const drawSurf_t *surf:job.casters)DrawCaster(surf,u);
+                for(const auto &batch:job.batches)DrawShadowBatch(batch,u);
+                for(size_t caster=0;caster<job.casters.size();++caster)
+                    if(job.batchedCasters.empty()||!job.batchedCasters[caster])DrawCaster(job.casters[caster],u);
                 state.finalContent=job.content;state.haveFinal=true;++refreshedFaces;
             }
     }
     GLSLProgram::Deactivate();backEnd.viewDef=savedView;
     savedRead->Bind();savedDraw->BindDraw();GL_State(GLS_DEFAULT);
     qglEnable(GL_STENCIL_TEST);qglEnable(GL_CULL_FACE);backEnd.glState.faceCulling=-1;
+}
+
+void MobileLightingStage::Impl::DrawShadowBatch(const MobileShadowBatch::Draw &batch, ShadowUniforms *u) {
+	const auto *first=static_cast<const drawSurf_t *>(batch.surfaces[0]);
+	u->modelMatrix.Set(first->space->modelMatrix);u->alphaTest.Set(-1.0f);
+	vertexCache.VertexPosition(first->ambientCache);
+	vertexCache.BindExternalIndexBuffer(batch.buffer);
+	// Indices include each mesh's global vertex base. Keep the original VBO,
+	// shader and exact model matrix; a single ordinary GLES indexed draw.
+	qglDrawElements(GL_TRIANGLES,batch.count,GL_UNSIGNED_INT,nullptr);
+	if (!backEnd.viewDef->IsLightGem() && backEnd.viewDef->viewEntitys && r_showPrimitives.GetBool()) {
+		++backEnd.pc.c_drawCalls[DCK_SHADOW];
+		backEnd.pc.c_drawIndexes[DCK_SHADOW]+=batch.count;
+		backEnd.pc.c_drawVerts[DCK_SHADOW]+=batch.vertices;
+	}
+	++shadowDraws;shadowBatches.RecordDraw(batch);
 }
 
 bool MobileLightingStage::Impl::ShadowInfo( const viewLight_t *light, bool local, idVec4 &page, idVec4 &params, float projection[16] ) const {
@@ -893,6 +961,9 @@ void MobileLightingStage::Impl::DrawBatch( const viewDef_t *view, ViewPlan &plan
 		bounds.x2=std::min(bounds.x2,rect.x2);bounds.y2=std::min(bounds.y2,rect.y2);
 		foveation.Draw(bounds);
 	}
+	if (vr_rendererDiagnostics.GetBool() && !view->IsLightGem() && !inter.parallaxImage &&
+		r_questShadowEarlyReject.GetBool() && u->earlyShadowReject.IsPresent() &&
+		std::any_of(lightFlags,lightFlags+count,[](int flags){return (flags&AMBIENT_LIGHT)==0;})) ++earlyRejectDraws;
 	RB_DrawElementsWithCounters(surf, DCK_INTERACTION); ++eyeDraws;
 }
 
@@ -922,6 +993,7 @@ LightingUniforms *MobileLightingStage::Impl::UseLighting(const viewDef_t *view,i
 	u->ambientParams.Set(r_ambientMinLevel.GetFloat(), view->IsLightGem() ? 1.0f : r_ambientGamma.GetFloat());
 	// Lightgem is a gameplay measurement and historically uses hard shadows.
 	u->shadowFilter.Set(!view->IsLightGem() && r_softShadowsQuality.GetBool());
+	u->earlyShadowReject.Set(!view->IsLightGem() && r_questShadowEarlyReject.GetBool());
     return u;
 }
 

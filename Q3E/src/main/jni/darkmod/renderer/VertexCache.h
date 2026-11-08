@@ -18,6 +18,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 
 #include "renderer/backend/GpuBuffer.h"
 #include <atomic>
+#include <vector>
 
 // vertex cache calls should only be made by the front end
 
@@ -72,11 +73,14 @@ public:
 	// Backend-only access for a separate motion-vector VAO. Previous dynamic
 	// vertices remain in the three-frame ring; never read mutable frontend data.
 	GLuint VertexBuffer(vertCacheHandle_t handle) const {
-		return handle.isStatic ? staticVertexBuffer : dynamicData.vertexBuffer.GetAPIObject();
+		return handle.isStatic ? staticVertexBuffer : dynamicData.vertexBuffer.GetAPIObjectForOffset(handle.offset);
 	}
 	GLuint IndexBuffer(vertCacheHandle_t handle) const {
-		return handle.isStatic ? staticIndexBuffer : dynamicData.indexBuffer.GetAPIObject();
+		return handle.isStatic ? staticIndexBuffer : dynamicData.indexBuffer.GetAPIObjectForOffset(handle.offset);
 	}
+	GLuint VertexOffset(vertCacheHandle_t handle) const { return handle.isStatic ? handle.offset : dynamicData.vertexBuffer.PhysicalOffset(handle.offset); }
+	GLuint IndexOffset(vertCacheHandle_t handle) const { return handle.isStatic ? handle.offset : dynamicData.indexBuffer.PhysicalOffset(handle.offset); }
+	bool IsStreamingIsolated() const { return dynamicData.vertexBuffer.HasIsolatedFrames() && dynamicData.indexBuffer.HasIsolatedFrames(); }
 
 	// will be an int offset cast to a pointer of ARB_vertex_buffer_object
 	void			VertexPosition( vertCacheHandle_t handle, attribBind_t attrib = attribBind_t::ATTRIB_REGULAR );
@@ -116,6 +120,11 @@ public:
 	int GetBaseVertex() {
 		return basePointer;
 	}
+	// The main/GL thread may inspect only the already submitted CPU index
+	// region or an owned static-upload snapshot. Write-only persistent dynamic
+	// mappings and unavailable/out-of-range snapshots return null.
+	const glIndex_t *ReadSubmittedIndexes(vertCacheHandle_t handle, unsigned count) const;
+	void BindExternalIndexBuffer(GLuint buffer);
 
 public:
 	static idCVar	r_showVertexCache;
@@ -127,6 +136,8 @@ public:
 	drawSurf_t		screenRectSurf;
 
 private:
+	std::vector<glIndex_t> submittedStaticIndexes;
+	void SnapshotStaticIndexes(const glIndex_t *indexes, unsigned bytes, bool enabled);
 	std::atomic<uint64_t> staticRevision{1};
 
 	int				currentFrame;			// for purgable block tracking

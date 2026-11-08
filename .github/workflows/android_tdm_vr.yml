@@ -6,8 +6,8 @@
 #     (so ordinary pushes do not spend CI minutes)
 #   - manual "Run workflow" (needs this file to exist on the default branch)
 #
-# Simple phone download: Releases -> Quest 3 - Frame Timing Fix.
-# APK filename: TDM-Quest3-Frame-Timing-Fix.apk (also inside the Actions artifact).
+# Simple phone download: Releases -> Quest 3 - Streaming and Shadow Update.
+# APK filename: TDM-Quest3-Streaming-and-Shadows.apk (also inside the Actions artifact).
 
 name: Android APK - TDM only (arm64)
 
@@ -76,6 +76,8 @@ jobs:
         export TDM_OPENXR_HEADERS="$RUNNER_TEMP/quest-openxr-headers"
         python3 tests/renderer/frame_timing_test.py
         python3 tests/renderer/spacewarp_gles_test.py
+        python3 tests/renderer/mobile_shadow_batch_test.py
+        python3 tests/renderer/mobile_gles_test.py MobileShaderTests.test_blocked_light_rejection_matches_full_brdf
 
     - name: Build APK (TDM only, arm64-v8a)
       run: |
@@ -105,13 +107,13 @@ jobs:
     - name: Collect APK
       run: |
         mkdir -p out
-        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest3-Frame-Timing-Fix.apk"
+        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest3-Streaming-and-Shadows.apk"
         ls -la out
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Quest3-Frame-Timing-Fix-APK
+        name: Quest3-Streaming-and-Shadows-APK
         path: out/*.apk
         if-no-files-found: error
         retention-days: 30
@@ -121,12 +123,12 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        tag=quest-frame-timing-fix
-        apk=out/TDM-Quest3-Frame-Timing-Fix.apk
-        notes="Fixes misleading CPU/GPU reporting: the old CPU number measured only stereo-render submission, while frame time included unreported engine work, buffer uploads, fence waits and xrEndFrame. Complete frame cycles now have exclusive wall-time buckets, separate main-thread CPU execution time, frame-ID-paired asynchronous GL elapsed queries with coverage, p95 and proper clock-disjoint/pause resets. The existing diagnostics include optional Meta app/compositor CPU/GPU counters, dropped frames and the raw SpaceWarp mode; Meta defines their measurement windows. Application FPS is distinguished from display Hz. Existing launcher performance/diagnostics switches control collection; no new control bindings. SpaceWarp, multiview, eye resolution and rendering behavior are preserved. Android ARM64 build, deterministic timing/query/Meta protocol checks, production SpaceWarp GLES checks and stereo regression checks passed. This release fixes accounting and identifies waits; it does not claim a measured Quest FPS improvement. Source commit: ${GITHUB_SHA} (branch ${GITHUB_REF_NAME})."
+        tag=quest-streaming-and-shadows
+        apk=out/TDM-Quest3-Streaming-and-Shadows.apk
+        notes="Separates in-flight dynamic geometry into distinct GPU buffer objects on Quest's nonpersistent path, removing the shared-object upload/read dependency that can serialize CPU uploads with GPU rendering. Keeps the same total buffer capacity, existing reuse fences and four-frame SpaceWarp vertex history. Ordinary draws and SpaceWarp resolve frame-local buffer objects and offsets, including previous animated vertices. Also merges compatible static opaque shadow meshes into cached indexed draws and rejects fully shadowed non-parallax direct-light BRDF calculations. Original geometry, shadow resolution, single depth atlas, gameplay and eye resolution are preserved. No GPU readback or added depth copies. Separate launcher switches control streaming buffers, shadow batching and blocked-light rejection. Existing diagnostics show actual buffer mode, shadow submission reductions and eligible lighting draws. Shader patch 15 installs automatically. Android ARM64 build, production delayed-GPU lifetime/dependency tests, real GLES index-ring/depth comparisons and isolated-buffer SpaceWarp motion/depth checks, lighting image comparisons across all light capacities, launcher and stereo checks passed. The dependency model and software-driver ABBA timings verify mechanisms and workload behavior, not a measured Quest FPS improvement. All previous multiview, SpaceWarp, foveation and frame-timing changes are included. Source commit: ${GITHUB_SHA} (branch ${GITHUB_REF_NAME})."
         if gh release view "$tag" >/dev/null 2>&1; then
           gh release upload "$tag" "$apk" --clobber
-          gh release edit "$tag" --title "Quest 3 - Frame Timing Fix" --notes "$notes" --latest
+          gh release edit "$tag" --title "Quest 3 - Streaming and Shadow Update" --notes "$notes" --latest
         else
-          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 - Frame Timing Fix" --notes "$notes" --latest
+          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 - Streaming and Shadow Update" --notes "$notes" --latest
         fi

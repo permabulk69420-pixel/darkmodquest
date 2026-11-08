@@ -2200,6 +2200,15 @@ public class GameLauncher extends Activity
 
 		final SharedPreferences vrPrefs = PreferenceManager.getDefaultSharedPreferences(this);
 		V.vr_frame_memory.setChecked(vrPrefs.getBoolean(Q3EPreference.pref_vr_frame_memory, true));
+		V.vr_shadow_early_reject.setChecked(vrPrefs.getBoolean(Q3EPreference.pref_vr_shadow_early_reject, true));
+		V.vr_shadow_early_reject.setOnCheckedChangeListener((button, checked) ->
+			vrPrefs.edit().putBoolean(Q3EPreference.pref_vr_shadow_early_reject, checked).commit());
+		V.vr_buffer_streaming.setChecked(vrPrefs.getBoolean(Q3EPreference.pref_vr_buffer_streaming, true));
+		V.vr_buffer_streaming.setOnCheckedChangeListener((button, checked) ->
+			vrPrefs.edit().putBoolean(Q3EPreference.pref_vr_buffer_streaming, checked).commit());
+		V.vr_shadow_batching.setChecked(vrPrefs.getBoolean(Q3EPreference.pref_vr_shadow_batching, true));
+		V.vr_shadow_batching.setOnCheckedChangeListener((button, checked) ->
+			vrPrefs.edit().putBoolean(Q3EPreference.pref_vr_shadow_batching, checked).commit());
 		V.vr_spacewarp.setChecked(vrPrefs.getBoolean(Q3EPreference.pref_vr_spacewarp, true));
 		V.vr_spacewarp.setOnCheckedChangeListener((button, checked) ->
 			vrPrefs.edit().putBoolean(Q3EPreference.pref_vr_spacewarp, checked).commit());
@@ -5127,6 +5136,9 @@ public class GameLauncher extends Activity
 		public CheckBox vr_renderer_diagnostics;
 		public CheckBox vr_framebuffer_optimizations;
 		public CheckBox vr_frame_memory;
+		public CheckBox vr_shadow_early_reject;
+		public CheckBox vr_buffer_streaming;
+		public CheckBox vr_shadow_batching;
 		public CheckBox vr_spacewarp;
 		public CheckBox vr_mixed_precision;
 		public LinearLayout fteqw_section;
@@ -5349,6 +5361,9 @@ public class GameLauncher extends Activity
 			vr_foveation = findViewById(R.id.vr_foveation);
 			vr_framebuffer_optimizations = findViewById(R.id.vr_framebuffer_optimizations);
 			vr_frame_memory = findViewById(R.id.vr_frame_memory);
+			vr_shadow_early_reject = findViewById(R.id.vr_shadow_early_reject);
+			vr_buffer_streaming = findViewById(R.id.vr_buffer_streaming);
+			vr_shadow_batching = findViewById(R.id.vr_shadow_batching);
 			vr_spacewarp = findViewById(R.id.vr_spacewarp);
 			vr_mixed_precision = findViewById(R.id.vr_mixed_precision);
 			vr_refresh_rate = findViewById(R.id.vr_refresh_rate);

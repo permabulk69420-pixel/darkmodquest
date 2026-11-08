@@ -22,6 +22,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #include "renderer/QuestFrameTiming.h"
 #ifdef TDM_VR_OPENXR
 #include "renderer/vr/OpenXRSpaceWarp.h"
+#include "renderer/vr/OpenXRBackend.h"
 #endif
 
 const int32 MAX_VERTCACHE_SIZE = INT_MAX;
@@ -30,6 +31,8 @@ idCVar idVertexCache::r_showVertexCache( "r_showVertexCache", "0", CVAR_INTEGER 
 idCVar idVertexCache::r_frameVertexMemory( "r_frameVertexMemory", "4096", CVAR_INTEGER | CVAR_RENDERER | CVAR_ARCHIVE, "Initial amount of per-frame temporary vertex memory, in kB (max 131071)" );
 idCVar idVertexCache::r_frameIndexMemory( "r_frameIndexMemory", "4096", CVAR_INTEGER | CVAR_RENDERER | CVAR_ARCHIVE, "Initial amount of per-frame temporary index memory, in kB (max 131071)" );
 idCVarBool r_usePersistentMapping( "r_usePersistentMapping", "1", CVAR_RENDERER | CVAR_ARCHIVE, "Use persistent buffer mapping" );
+idCVar r_questBufferStreaming("r_questBufferStreaming","1",CVAR_RENDERER|CVAR_BOOL|CVAR_INIT,
+	"Use separate in-flight dynamic geometry buffer objects to remove upload/read dependencies on GLES; set in launcher");
 
 idVertexCache		vertexCache;
 uint32_t			staticVertexSize, staticIndexSize, staticShadowSize;
@@ -68,11 +71,13 @@ static void SwitchFrameGeoBufferSet( geoBufferSet_t &gbs ) {
 
 static void AllocGeoBufferSet( geoBufferSet_t &gbs, const int vertexBytes, const int indexBytes ) {
 	bool motionHistory = false;
+	bool isolateFrames = false;
 #ifdef TDM_VR_OPENXR
 	motionHistory = vr_spaceWarp.GetBool();
+	isolateFrames = r_questBufferStreaming.GetBool();
 #endif
-	gbs.vertexBuffer.InitWriteFrameAhead( GL_ARRAY_BUFFER, vertexBytes, VERTEX_CACHE_ALIGN, motionHistory );
-	gbs.indexBuffer.InitWriteFrameAhead( GL_ELEMENT_ARRAY_BUFFER, indexBytes, INDEX_CACHE_ALIGN );
+	gbs.vertexBuffer.InitWriteFrameAhead( GL_ARRAY_BUFFER, vertexBytes, VERTEX_CACHE_ALIGN, motionHistory, isolateFrames );
+	gbs.indexBuffer.InitWriteFrameAhead( GL_ELEMENT_ARRAY_BUFFER, indexBytes, INDEX_CACHE_ALIGN, false, isolateFrames );
 	GL_SetDebugLabel( GL_BUFFER, gbs.vertexBuffer.GetAPIObject(), "DynamicVertexCache" );
 	GL_SetDebugLabel( GL_BUFFER, gbs.indexBuffer.GetAPIObject(), "DynamicIndexCache" );
 	ClearGeoBufferSet( gbs );
@@ -97,18 +102,18 @@ void idVertexCache::VertexPosition( vertCacheHandle_t handle, attribBind_t attri
 		if ( handle.isStatic ) {
 			vbo = ( attrib == ATTRIB_REGULAR ? staticVertexBuffer : staticShadowBuffer );
 		} else {
-			vbo = dynamicData.vertexBuffer.GetAPIObject();
+			vbo = dynamicData.vertexBuffer.GetAPIObjectForOffset(handle.offset);
 		}
 	}
 
 	if ( attrib == ATTRIB_REGULAR ) {
 		vaState.BindVertexBufferAndSetVertexFormat( vbo, VF_REGULAR );
 		assert( handle.offset % sizeof( idDrawVert ) == 0 );
-		basePointer = handle.offset / sizeof( idDrawVert );
+		basePointer = VertexOffset(handle) / sizeof( idDrawVert );
 	} else if ( attrib == ATTRIB_SHADOW ) {
 		vaState.BindVertexBufferAndSetVertexFormat( vbo, VF_SHADOW );
 		assert( handle.offset % sizeof( shadowCache_t ) == 0 );
-		basePointer = handle.offset / sizeof( shadowCache_t );
+		basePointer = VertexOffset(handle) / sizeof( shadowCache_t );
 	} else {
 		assert( 0 );
 	}
@@ -128,7 +133,7 @@ void *idVertexCache::IndexPosition( vertCacheHandle_t handle ) {
 		if ( handle.isStatic ) {
 			vbo = staticIndexBuffer;
 		} else {
-			vbo = dynamicData.indexBuffer.GetAPIObject();
+			vbo = dynamicData.indexBuffer.GetAPIObjectForOffset(handle.offset);
 		}
 	}
 
@@ -137,7 +142,33 @@ void *idVertexCache::IndexPosition( vertCacheHandle_t handle ) {
 		currentIndexBuffer = vbo;
 	}
 
-	return ( void * )( size_t )( handle.offset );
+	return ( void * )( size_t )( IndexOffset(handle) );
+}
+
+const glIndex_t *idVertexCache::ReadSubmittedIndexes(vertCacheHandle_t handle, unsigned count) const {
+	if (!handle.IsValid() || !count || handle.offset % sizeof(glIndex_t) || count > handle.size / sizeof(glIndex_t)) return nullptr;
+	if (handle.isStatic) {
+		if (handle.offset % sizeof(glIndex_t) || handle.offset / sizeof(glIndex_t) > submittedStaticIndexes.size()) return nullptr;
+		const size_t first = handle.offset / sizeof(glIndex_t);
+		return count <= submittedStaticIndexes.size() - first ? submittedStaticIndexes.data() + first : nullptr;
+	}
+	if (handle.frameNumber != ((currentFrame - 1) & VERTCACHE_FRAME_MASK)) return nullptr;
+	return reinterpret_cast<const glIndex_t *>(dynamicData.indexBuffer.ReadDrawingRange(handle.offset, count * sizeof(glIndex_t)));
+}
+
+void idVertexCache::SnapshotStaticIndexes(const glIndex_t *indexes, unsigned bytes, bool enabled) {
+	if (!enabled || !indexes || !bytes) { std::vector<glIndex_t>().swap(submittedStaticIndexes); return; }
+	// A bounded, owned copy captured at upload time. Never dereference mutable
+	// frontend geometry or map/read GPU memory while assembling shadow batches.
+	const unsigned count = std::min(bytes, 32u * 1024 * 1024) / sizeof(glIndex_t);
+	submittedStaticIndexes.assign(indexes, indexes + count);
+}
+
+void idVertexCache::BindExternalIndexBuffer(GLuint buffer) {
+	// Cached batch buffers can be deleted/recreated with a recycled GL name.
+	// Establish the actual VAO binding even if the integer name looks familiar.
+	qglBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buffer);
+	currentIndexBuffer = buffer;
 }
 
 /*
@@ -201,6 +232,7 @@ idVertexCache::Shutdown
 ===========
 */
 void idVertexCache::Shutdown() {
+	std::vector<glIndex_t>().swap(submittedStaticIndexes);
 	staticRevision.fetch_add(1, std::memory_order_relaxed);
 	ClearGeoBufferSet( dynamicData );
 	FreeGeoBufferSet( dynamicData );
@@ -347,7 +379,7 @@ void idVertexCache::PrepareStaticCacheForUpload() {
 	vaState.BindVertexBuffer( 0 );
 
 	// upload function to be called twice for vertex and index data
-	auto upload = [](GLuint buffer, GLenum bufferType, int size, StaticList &staticList ) {
+	auto upload = [this](GLuint buffer, GLenum bufferType, int size, StaticList &staticList ) {
 		int offset = 0;
 		byte* ptr = (byte*)Mem_Alloc16( size );
 		for ( auto& entry : staticList ) {
@@ -357,6 +389,13 @@ void idVertexCache::PrepareStaticCacheForUpload() {
 				Mem_Free( (void*)entry.ptr );
 				entry.ptr = nullptr;
 			}
+		}
+		if (bufferType == GL_ELEMENT_ARRAY_BUFFER) {
+			bool retain = false;
+#ifdef TDM_VR_OPENXR
+			retain = vrBackend->IsActive() && cvarSystem->GetCVarBool("r_questShadowBatching");
+#endif
+			SnapshotStaticIndexes(reinterpret_cast<const glIndex_t *>(ptr), unsigned(offset), retain);
 		}
 		qglBindBuffer( bufferType, buffer );
 		if ( GLAD_GL_ARB_buffer_storage ) {

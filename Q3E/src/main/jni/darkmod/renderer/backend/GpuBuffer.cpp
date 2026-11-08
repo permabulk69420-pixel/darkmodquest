@@ -26,7 +26,7 @@ idCVar r_gpuBufferNonpersistentUpdateMode(
 
 const int GpuBuffer::NUM_FRAMES;
 
-void GpuBuffer::Init( GLenum type, GLuint size, GLuint alignment, bool retainPreviousFrame ) {
+void GpuBuffer::Init( GLenum type, GLuint size, GLuint alignment, bool retainPreviousFrame, bool isolateFrames ) {
 	if( bufferObject ) {
 		Destroy();
 	}
@@ -37,18 +37,30 @@ void GpuBuffer::Init( GLenum type, GLuint size, GLuint alignment, bool retainPre
 	this->retainPreviousFrame = retainPreviousFrame;
 	numFrames = NUM_FRAMES + (retainPreviousFrame ? 1 : 0);
 
-	qglGenBuffers( 1, &bufferObject );
-	qglBindBuffer( type, bufferObject );
-
 	usesPersistentMapping = r_usePersistentMapping && GLAD_GL_ARB_buffer_storage;
+	isolatedFrames = isolateFrames && !usesPersistentMapping;
 
 	totalSize = numFrames * frameSize;
-	if ( usesPersistentMapping ) {
-		qglBufferStorage( type, totalSize, nullptr, GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT );
-		bufferContents = ( byte* )qglMapBufferRange( type, 0, totalSize, GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT );
+	if (isolatedFrames) {
+		// Same total capacity as the ring, but distinct GL object dependencies.
+		// A driver need not synchronize an upload against reads in OTHER frames.
+		for (int frame = 0; frame < numFrames; ++frame) {
+			qglGenBuffers(1, &frameBuffers[frame]);
+			qglBindBuffer(type, frameBuffers[frame]);
+			qglBufferData(type, frameSize, nullptr, GL_DYNAMIC_DRAW);
+		}
+		bufferObject = frameBuffers[0];
+		bufferContents = (byte *)Mem_Alloc16(totalSize);
 	} else {
-		qglBufferData( type, totalSize, nullptr, GL_DYNAMIC_DRAW );
-		bufferContents = ( byte* )Mem_Alloc16( totalSize );
+		qglGenBuffers(1, &bufferObject);
+		qglBindBuffer(type, bufferObject);
+		if ( usesPersistentMapping ) {
+			qglBufferStorage( type, totalSize, nullptr, GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT );
+			bufferContents = ( byte* )qglMapBufferRange( type, 0, totalSize, GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT );
+		} else {
+			qglBufferData( type, totalSize, nullptr, GL_DYNAMIC_DRAW );
+			bufferContents = ( byte* )Mem_Alloc16( totalSize );
+		}
 	}
 
 	currentWritingFrame = 0;
@@ -56,8 +68,8 @@ void GpuBuffer::Init( GLenum type, GLuint size, GLuint alignment, bool retainPre
 	bytesCommittedInCurrentFrame = 0;
 }
 
-void GpuBuffer::InitWriteFrameAhead( GLenum type, GLuint size, GLuint alignment, bool retainPreviousFrame ) {
-	Init( type, size, alignment, retainPreviousFrame );
+void GpuBuffer::InitWriteFrameAhead( GLenum type, GLuint size, GLuint alignment, bool retainPreviousFrame, bool isolateFrames ) {
+	Init( type, size, alignment, retainPreviousFrame, isolateFrames );
 	currentWritingFrame = 1;
 }
 
@@ -81,9 +93,14 @@ void GpuBuffer::Destroy() {
 		Mem_Free16( bufferContents );
 	}
 
-	qglDeleteBuffers( 1, &bufferObject );
+	if (isolatedFrames) {
+		for (int frame = 0; frame < numFrames; ++frame) {
+			qglDeleteBuffers(1, &frameBuffers[frame]); frameBuffers[frame] = 0;
+		}
+	} else qglDeleteBuffers( 1, &bufferObject );
 	bufferObject = 0;
 	bufferContents = nullptr;
+	isolatedFrames = false;
 }
 
 byte * GpuBuffer::CurrentWriteLocation() const {
@@ -97,15 +114,17 @@ GLuint GpuBuffer::BytesRemaining() const {
 void GpuBuffer::Commit( GLuint numBytes ) {
 	GLuint alignedSize = ALIGN( numBytes, alignment );
 	assert( alignedSize + bytesCommittedInCurrentFrame <= frameSize );
+	if (!alignedSize) return;
 
 	// for persistent mapping, nothing to do. Otherwise, we need to upload the committed data
 	if( !usesPersistentMapping ) {
 		GLuint currentOffset = CurrentOffset();
-		qglBindBuffer( type, bufferObject );
+		const GLuint physicalOffset = PhysicalOffset(currentOffset);
+		qglBindBuffer( type, GetAPIObjectForOffset(currentOffset) );
 		if (r_gpuBufferNonpersistentUpdateMode.GetInteger() == 0)
-			qglBufferSubData( type, currentOffset, alignedSize, bufferContents + currentOffset );
+			qglBufferSubData( type, physicalOffset, alignedSize, bufferContents + currentOffset );
 		else {
-			void *dst = qglMapBufferRange( type, currentOffset, alignedSize, GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_UNSYNCHRONIZED_BIT );
+			void *dst = qglMapBufferRange( type, physicalOffset, alignedSize, GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_UNSYNCHRONIZED_BIT );
 			memcpy(dst, bufferContents + currentOffset, alignedSize);
 			qglUnmapBuffer( type );
 		}
@@ -118,17 +137,18 @@ void GpuBuffer::BindRangeToIndexTarget( GLuint index, byte *offset, GLuint size 
 	GLuint alignedSize = ALIGN( size, alignment );
 	GLintptr mapOffset = offset - bufferContents;
 	assert(mapOffset >= 0 && mapOffset + alignedSize <= totalSize);
-	qglBindBufferRange( type, index, bufferObject, mapOffset, alignedSize );
+	assert(!isolatedFrames || PhysicalOffset(GLuint(mapOffset)) + alignedSize <= frameSize);
+	qglBindBufferRange( type, index, GetAPIObjectForOffset(GLuint(mapOffset)), PhysicalOffset(GLuint(mapOffset)), alignedSize );
 }
 
 void GpuBuffer::Bind() {
-	qglBindBuffer(type, bufferObject);
+	qglBindBuffer(type, isolatedFrames ? frameBuffers[currentWritingFrame] : bufferObject);
 }
 
 const void * GpuBuffer::BufferOffset( const void *pointer ) {
 	ptrdiff_t mapOffset = static_cast< const byte* >( pointer ) - bufferContents;
 	assert( (size_t)mapOffset < (size_t)totalSize );
-	return reinterpret_cast< const void* >( mapOffset );
+	return reinterpret_cast< const void* >( size_t(PhysicalOffset(GLuint(mapOffset))) );
 }
 
 void GpuBuffer::SwitchFrame() {

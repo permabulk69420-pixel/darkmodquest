@@ -34,6 +34,7 @@ uniform vec4 u_clipPlane;
 uniform vec2 u_renderResolution, u_ambientParams;
 uniform highp vec4 u_ssaoViewport;
 uniform int u_flags, u_lightCount, u_lightFlags[QUEST_LIGHT_CAPACITY], u_lightTextureSet[QUEST_LIGHT_CAPACITY], u_shadowFilter;
+uniform int u_earlyShadowReject;
 uniform vec3 u_lightOrigin[QUEST_LIGHT_CAPACITY];
 uniform vec4 u_diffuseColor[QUEST_LIGHT_CAPACITY], u_specularColor[QUEST_LIGHT_CAPACITY];
 uniform highp float u_lightColorScale[QUEST_LIGHT_CAPACITY];
@@ -83,6 +84,17 @@ vec4 illuminate(int i, sampler2D projectionTexture, samplerCube projectionCube, 
 #endif
         return vec4(lightColor * ao * color.rgb, color.a);
     }
+    vec3 worldOffset = checkFlag(u_flags, SFL_INTERACTION_PARALLAX_OFFSET_EXTERNAL_SHADOWS)
+        ? mat3(u_modelMatrix) * tangentToModel * scaledOffset : vec3(0.0);
+    // Shadow visibility needs the geometric normal, not any material fetch or
+    // BRDF result. Fully blocked direct lights need no direction normalization,
+    // half vector, Fresnel or specular power. Parallax keeps its old control
+    // flow because its tracing helper computes texture derivatives internally.
+    vec3 worldNormal = normalize(mat3(u_modelMatrix) * tangentToModel[2]);
+    float visibility = mobileShadow(u_shadowAtlas, u_shadowPage[i], u_shadowParams[i], u_shadowProjection[i],
+        positionWorld + worldOffset, u_lightOrigin[i], worldNormal, u_shadowFilter != 0);
+    if (u_earlyShadowReject != 0 && !checkFlag(u_flags, SFL_SURFACE_HAS_PARALLAX_TEXTURE) && visibility == 0.0)
+        return vec4(0.0, 0.0, 0.0, 1.0);
     vec3 toLight = (worldPosToObject(u_lightOrigin[i], u_modelMatrix) - positionModel) * tangentToModel - scaledOffset;
     InteractionGeometry geom = computeInteractionGeometry(toLight, viewLocal - scaledOffset, normal);
     vec3 color = questAdvancedInteraction(geom, u_diffuseColor[i].rgb, diffuseTexel,
@@ -94,12 +106,6 @@ vec4 illuminate(int i, sampler2D projectionTexture, samplerCube projectionCube, 
     if (checkFlag(u_flags, SFL_SURFACE_HAS_PARALLAX_TEXTURE) && u_parallaxIterations.z > 0)
         parallaxShadow = computeParallaxShadow(u_parallaxTexture, u_parallaxHeightScale, texParallax, offset, toLight,
                                               u_parallaxIterations.z, u_parallaxShadowSoftness, questFramebufferUV() * u_renderResolution);
-    vec3 worldOffset = checkFlag(u_flags, SFL_INTERACTION_PARALLAX_OFFSET_EXTERNAL_SHADOWS)
-        ? mat3(u_modelMatrix) * tangentToModel * scaledOffset : vec3(0.0);
-    // Bias from geometric normals avoids normal-map-dependent shadow acne.
-    vec3 worldNormal = normalize(mat3(u_modelMatrix) * tangentToModel[2]);
-    float visibility = mobileShadow(u_shadowAtlas, u_shadowPage[i], u_shadowParams[i], u_shadowProjection[i],
-        positionWorld + worldOffset, u_lightOrigin[i], worldNormal, u_shadowFilter != 0);
     return vec4(color * lightColor * parallaxShadow * visibility, 1.0);
 }
 

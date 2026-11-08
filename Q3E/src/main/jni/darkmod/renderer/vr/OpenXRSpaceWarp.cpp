@@ -152,10 +152,10 @@ void OpenXRSpaceWarp::Impl::DrawSurface(const drawSurf_t *surf,MotionUniforms *u
 	u->currentMvp.SetArray(2,currentMvp[0]);u->previousMvp.SetArray(2,previousMvp[0]);
 	const GLuint currentBuffer=vertexCache.VertexBuffer(surf->ambientCache), previousBuffer=vertexCache.VertexBuffer(previousVertices);
 	qglBindBuffer(GL_ARRAY_BUFFER,currentBuffer);
-	qglVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,sizeof(idDrawVert),(void *)(uintptr_t(surf->ambientCache.offset)+offsetof(idDrawVert,xyz)));
-	qglVertexAttribPointer(8,2,GL_FLOAT,GL_FALSE,sizeof(idDrawVert),(void *)(uintptr_t(surf->ambientCache.offset)+offsetof(idDrawVert,st)));
+	qglVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,sizeof(idDrawVert),(void *)(uintptr_t(vertexCache.VertexOffset(surf->ambientCache))+offsetof(idDrawVert,xyz)));
+	qglVertexAttribPointer(8,2,GL_FLOAT,GL_FALSE,sizeof(idDrawVert),(void *)(uintptr_t(vertexCache.VertexOffset(surf->ambientCache))+offsetof(idDrawVert,st)));
 	qglBindBuffer(GL_ARRAY_BUFFER,previousBuffer);
-	qglVertexAttribPointer(1,3,GL_FLOAT,GL_FALSE,sizeof(idDrawVert),(void *)(uintptr_t(previousVertices.offset)+offsetof(idDrawVert,xyz)));
+	qglVertexAttribPointer(1,3,GL_FLOAT,GL_FALSE,sizeof(idDrawVert),(void *)(uintptr_t(vertexCache.VertexOffset(previousVertices))+offsetof(idDrawVert,xyz)));
 	qglBindBuffer(GL_ELEMENT_ARRAY_BUFFER,vertexCache.IndexBuffer(surf->indexCache));
 	GL_Cull(surf->material->GetCullType());
 	const bool offset=surf->material->TestMaterialFlag(MF_POLYGONOFFSET);
@@ -165,7 +165,7 @@ void OpenXRSpaceWarp::Impl::DrawSurface(const drawSurf_t *surf,MotionUniforms *u
 			stage->texture.image->BindToUnit(0);u->textureMatrix.Set(surf->GetTextureMatrix(stage));
 			u->alphaTest.Set(surf->shaderRegisters[stage->alphaTestRegister]);u->alpha.Set(surf->GetStageColor(stage)[3]);
 		}else {u->alphaTest.Set(-1.0f);u->alpha.Set(1.0f);}
-		qglDrawElements(GL_TRIANGLES,surf->numIndexes,GL_INDEX_TYPE,(void *)uintptr_t(surf->indexCache.offset));++draws;
+		qglDrawElements(GL_TRIANGLES,surf->numIndexes,GL_INDEX_TYPE,(void *)uintptr_t(vertexCache.IndexOffset(surf->indexCache)));++draws;
 	};
 	bool attempted=false;
 	if(surf->material->Coverage()==MC_PERFORATED) {

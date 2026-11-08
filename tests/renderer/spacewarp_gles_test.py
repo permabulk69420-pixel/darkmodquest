@@ -33,6 +33,7 @@ SHELL=r'''
 #include <cstring>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <xmmintrin.h>
 #include <map>
@@ -53,8 +54,8 @@ struct idDrawVert{idVec3 xyz;float st[2];float padding[15];};
 void identity(float *m){std::fill(m,m+16,0.f);m[0]=m[5]=m[10]=m[15]=1;}
 struct Matrix{float m[16];Matrix(){identity(m);}const float *ToFloatPtr()const{return m;}void ToGL(float *p)const{memcpy(p,m,sizeof(m));}};
 struct idStr:std::string{using std::string::string;operator const char *()const{return c_str();}static idStr Fmt(const char *fmt,const char *n,int i){char text[256];snprintf(text,sizeof(text),fmt,n,i);return idStr(text);}};
-const int CVAR_RENDERER=1,CVAR_BOOL=2,CVAR_INIT=4;
-struct idCVar{float value;template<class... T>idCVar(const char *,const char *v,T...):value(std::stof(v)){}bool GetBool()const{return value!=0;}float GetFloat()const{return value;}void SetBool(bool b){value=b;}};
+const int CVAR_RENDERER=1,CVAR_BOOL=2,CVAR_INIT=4,CVAR_ARCHIVE=8;
+struct idCVar{float value;template<class... T>idCVar(const char *,const char *v,T...):value(std::stof(v)){}int GetInteger()const{return int(value);}bool GetBool()const{return value!=0;}float GetFloat()const{return value;}void SetBool(bool b){value=b;}};
 idCVar r_offsetFactor("a","0"),r_offsetUnits("b","0");
 template<class T>struct idList:std::vector<T>{void Append(const T &v){this->push_back(v);}void SetNum(int n){this->resize(n);}int Num()const{return this->size();}T *Ptr(){return this->data();}void Clear(){this->clear();}};
 class idImage{public:static const int TEXTURE_NOT_LOADED=-1;GLuint texnum=~0u;int uploadWidth=0,uploadHeight=0;std::string imgName;
@@ -63,7 +64,25 @@ class idImage{public:static const int TEXTURE_NOT_LOADED=-1;GLuint texnum=~0u;in
 #define VERTCACHE_FRAMENUM_BITS 15
 CACHE_HANDLE
 const vertCacheHandle_t NO_CACHE={0,0,0,false};const uint32_t VERTCACHE_FRAME_MASK=(1<<15)-1;
-struct Cache{GLuint vertices=0,indices=0;uint64_t generation=1;uint64_t StaticRevision()const{return generation;}GLuint VertexBuffer(vertCacheHandle_t)const{return vertices;}GLuint IndexBuffer(vertCacheHandle_t)const{return indices;}}vertexCache;
+using byte=unsigned char;
+struct idCVarBool{bool value=false;operator bool()const{return value;}};
+idCVarBool r_usePersistentMapping;bool GLAD_GL_ARB_buffer_storage=false;
+#ifndef GL_MAP_PERSISTENT_BIT
+#define GL_MAP_PERSISTENT_BIT 0x0040
+#define GL_MAP_COHERENT_BIT 0x0080
+#endif
+unsigned ALIGN(unsigned n,unsigned a){return (n+a-1)/a*a;}
+void *Mem_Alloc16(unsigned n){void *p=nullptr;assert(posix_memalign(&p,16,n)==0);return p;}void Mem_Free16(void *p){free(p);}
+void glBufferStorage(GLenum,GLsizeiptr,const void *,GLbitfield){assert(false);}
+#include "renderer/backend/GpuBuffer.cpp"
+struct Cache{
+ GLuint vertices=0,indices=0;uint64_t generation=1;bool isolated=false;GpuBuffer streaming;
+ uint64_t StaticRevision()const{return generation;}
+ GLuint VertexBuffer(vertCacheHandle_t h)const{return isolated&&!h.isStatic?streaming.GetAPIObjectForOffset(h.offset):vertices;}
+ GLuint IndexBuffer(vertCacheHandle_t)const{return indices;}
+ GLuint VertexOffset(vertCacheHandle_t h)const{return isolated&&!h.isStatic?streaming.PhysicalOffset(h.offset):h.offset;}
+ GLuint IndexOffset(vertCacheHandle_t h)const{return h.offset;}
+}vertexCache;
 const int MC_OPAQUE=0,MC_PERFORATED=1,MC_TRANSLUCENT=2,SS_PORTAL_SKY=9,MF_POLYGONOFFSET=1,CT_FRONT_SIDED=1,DSF_ATMOSPHERIC_FOG=16;
 struct shaderStage_t{bool hasAlphaTest=false,enabled=true;int alphaTestRegister=0;float alpha=1;struct{idImage *image=nullptr;}texture;};
 struct idMaterial{int coverage=MC_OPAQUE,sort=0;std::vector<shaderStage_t>stages{{}};bool IsDrawn()const{return true;}int Coverage()const{return coverage;}int GetSort()const{return sort;}int GetNumStages()const{return stages.size();}const shaderStage_t *GetStage(int n)const{return &stages[n];}bool IsAtmosphericFog()const{return false;}int GetCullType()const{return 0;}bool TestMaterialFlag(int)const{return false;}float GetPolygonOffset()const{return 0;}};
@@ -158,6 +177,7 @@ struct WarpFixture{
  OpenXRSpaceWarp warp;FrameBuffer realDefault;idMaterial material;viewEntity_t entity;
  drawSurf_t surf;drawSurf_t *draws[1];viewDef_t view;MobileStereoView stereo;
  XrPosef pose=SpaceWarpMath::Identity();XrTime time=1000000000;GLuint reader=0,depthReader=0,depthColor=0,alpha=0,depthProgram=0;
+ byte *streamingBase=nullptr;
  std::array<idDrawVert,12>vertices;uint32_t indexes[6]={0,1,2,0,2,3};
  explicit WarpFixture(GLuint program,GLuint depthProgram,bool packed=false):depthProgram(depthProgram){
   programManager->program.id=program;programManager->program.groups.clear();programManager->program.valid=true;
@@ -176,7 +196,18 @@ struct WarpFixture{
   const int64_t formats[]={GL_RGBA8,GL_RGBA16F,packed?GL_DEPTH24_STENCIL8:GL_DEPTH_COMPONENT24};vr_spaceWarp.SetBool(true);
   require(warp.Initialize(reinterpret_cast<XrSession>(1),16,16,formats,3),"production initialization failed");
  }
- ~WarpFixture(){warp.Shutdown();managerBuffers.owned.clear();glDeleteBuffers(1,&vertexCache.vertices);glDeleteBuffers(1,&vertexCache.indices);glDeleteFramebuffers(1,&reader);glDeleteFramebuffers(1,&depthReader);glDeleteTextures(1,&depthColor);glDeleteTextures(1,&alpha);}
+ ~WarpFixture(){vertexCache.streaming.Destroy();vertexCache.isolated=false;warp.Shutdown();managerBuffers.owned.clear();glDeleteBuffers(1,&vertexCache.vertices);glDeleteBuffers(1,&vertexCache.indices);glDeleteFramebuffers(1,&reader);glDeleteFramebuffers(1,&depthReader);glDeleteTextures(1,&depthColor);glDeleteTextures(1,&alpha);}
+ void enableStreaming(){
+  warp.ResetHistory();vertexCache.streaming.InitWriteFrameAhead(GL_ARRAY_BUFFER,4*sizeof(idDrawVert),16,true,true);
+  vertexCache.isolated=true;streamingBase=vertexCache.streaming.CurrentWriteLocation()-4*sizeof(idDrawVert);
+ }
+ void streamedPosition(float x,float z){
+  auto &buffer=vertexCache.streaming;auto *destination=buffer.CurrentWriteLocation();
+  std::array<idDrawVert,4>data;
+  for(int n=0;n<4;++n){data[n]=vertices[n];data[n].xyz.v[0]=((n==1||n==2)?10:-10)+x;data[n].xyz.v[2]=z;}
+  memcpy(destination,data.data(),sizeof(data));surf.ambientCache.offset=destination-streamingBase;++surf.ambientCache.frameNumber;
+  buffer.Commit(sizeof(data));buffer.SwitchFrame();
+ }
  void position(int ring,float x,float z){for(int n=0;n<4;++n){vertices[ring*4+n].xyz.v[0]=((n==1||n==2)?10:-10)+x;vertices[ring*4+n].xyz.v[2]=z;}glBindBuffer(GL_ARRAY_BUFFER,vertexCache.vertices);glBufferSubData(GL_ARRAY_BUFFER,ring*4*sizeof(idDrawVert),4*sizeof(idDrawVert),&vertices[ring*4]);surf.ambientCache.offset=ring*4*sizeof(idDrawVert);++surf.ambientCache.frameNumber;}
  std::array<float,4>pixel(const XrSwapchainSubImage &sub,bool depth=false){
   const auto &r=runtime.at(sub.swapchain);require(!r.acquired,"runtime image submitted before release");GLuint texture=r.images[r.index];std::array<float,4>p;
@@ -283,6 +314,12 @@ extern "C" const char *validate_spacewarp(GLuint program,GLuint depthProgram){
   const auto forward=SpaceWarpMath::Rotate(gamePose.orientation,{0,0,-1});closeTo(forward.x,-1,"game/XR yaw");
   programManager->program.valid=false;f.warp.BeginFrame();require(!f.warp.Render(&f.view,f.stereo,f.pose,f.time,XR_GameUnitsToMetres),"failed shader rendered");require(!f.warp.Chain(views,info),"failed shader chained");programManager->program.valid=true;
   }
+  {WarpFixture streamed(program,depthProgram);streamed.enableStreaming();
+   streamed.streamedPosition(0,-5);streamed.frame(0,0,.8,true);
+   for(int frame=1;frame<=12;++frame){streamed.streamedPosition(frame%2?1:0,-5);streamed.frame(frame%2?.2f:-.2f,0,.8,false);}
+   require(vertexCache.streaming.HasIsolatedFrames(),"isolated vertex path was not active");
+   std::puts("PASS: production SpaceWarp reads isolated current/previous animated vertex objects with local offsets across twelve frame-store wraps");
+  }
   {WarpFixture packed(program,depthProgram,true);packed.frame(0,0,.75,true);}
   {OpenXRSpaceWarp unavailable;const int64_t missing[]={GL_RGBA8,GL_DEPTH_COMPONENT24};
    require(!unavailable.Initialize(reinterpret_cast<XrSession>(1),16,16,missing,2),"missing motion format accepted");
@@ -323,7 +360,7 @@ void main(){result=vec4(texture(image,vec3(uv,float(eye))).r,0,0,1);}''')
                             if name.startswith(prefix) and not name.endswith('/'):
                                 target=xr/name[len(prefix):];target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(archive.read(name))
                 self.assertTrue((xr/'openxr/openxr.h').exists(),'set TDM_OPENXR_HEADERS to the loader headers')
-                text=''.join((ENGINE/p).read_text() for p in ('renderer/vr/OpenXRSpaceWarp.cpp','renderer/vr/OpenXRSwapchain.cpp','renderer/backend/MobileUniform.h'))
+                text=''.join((ENGINE/p).read_text() for p in ('renderer/vr/OpenXRSpaceWarp.cpp','renderer/vr/OpenXRSwapchain.cpp','renderer/backend/MobileUniform.h','renderer/backend/GpuBuffer.cpp'))
                 attachment=method(ENGINE/'renderer/backend/FrameBuffer.cpp','void FrameBuffer::AddMultiviewTextures(')
                 names=set(re.findall(r'\bqgl(\w+)',text+attachment))
                 aliases='\n'.join(f'#define qgl{name} gl{name}' for name in names)

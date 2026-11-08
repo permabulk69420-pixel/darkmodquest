@@ -1342,6 +1342,7 @@ void OpenXRBackend::Impl::UpdateDiagnostics( const frameData_t *fd ) {
 		"OpenXR | 2 eyes %dx%d | display %.1f Hz | XR period %.1f ms\n"
 		"%s\n%s%s%s%s"
 		"Producer snapshot ms: game %d | scene %d | SMP %s\n"
+		"Dynamic geometry buffers: %s\n"
 		"Render wall ms (sample): prep %.1f | depth %.1f | light %.1f\n"
 		"Frame allocation: %s | reserved %d KiB\n"
 		"Framebuffer copies: %s | depth %d | direct tone %d | discarded %d\n"
@@ -1360,6 +1361,7 @@ void OpenXRBackend::Impl::UpdateDiagnostics( const frameData_t *fd ) {
 		++diagnosticsFrame, eyeWidth, eyeHeight, displayRefreshHz>0?displayRefreshHz:displayPeriod>0?1e9/double(displayPeriod):0.0, double(displayPeriod)/1e6,
 		timing, breakdown, meta, mobile, warp,
 		fd->questGameMsec, fd->questFrontendMsec, com_smp.GetBool() ? "ON" : "OFF",
+		vertexCache.IsStreamingIsolated()?"ISOLATED frames":"SHARED ring / persistent",
 		c.prepareCpuMs, c.depthCpuMs, c.lightingCpuMs,
 		cvarSystem->GetCVarBool("r_frameAllocChunks")?"PER-WORKER 16 KiB":"SHARED per request",
 		fd->frameMemoryAllocated.load(std::memory_order_relaxed)/1024,

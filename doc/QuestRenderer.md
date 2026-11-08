@@ -538,6 +538,91 @@ and peripheral lights visible to only one eye. The CPU check independently
 samples 10,000 transformed boxes to ensure visible points are never clipped.
 They do not emulate the headset compositor or measure Quest frame times.
 
+### Independent streaming buffers
+
+`Separate streaming GPU buffers` (`r_questBufferStreaming`, default on for
+Quest's vertex cache) gives every in-flight dynamic geometry frame a distinct
+GL buffer object when persistent mapping is unavailable. The old implementation
+uploaded a different range of the same object still being read by the GPU;
+`glBufferSubData` permits implicit whole-object synchronization in that case.
+Separate objects remove that cross-frame object dependency. This targets
+CPU/GPU serialization, not a reduction in resolution or simulation work.
+
+Three index stores and three vertex stores are used normally; SpaceWarp retains
+its fourth vertex store. Each store contains one frame's capacity, so total GPU
+and CPU staging capacity remains equal to the original ring. Existing fences
+protect reuse, including the extra previous-vertex reads by SpaceWarp. A CPU
+producer continues writing the next staging region while the backend consumes
+current and previous stores. Persistent mapping keeps the existing upload-free
+path. The option takes effect on restart and has its own launcher switch.
+
+Frame-safe handles retain their logical ring offsets. `VertexCache` translates
+these into the corresponding GL object and local vertex/index offset for
+ordinary draws. SpaceWarp separately resolves both current and previous vertex
+objects and offsets. Uniform-buffer streaming is unchanged. Existing diagnostics
+show the actual `ISOLATED frames` state, while the complete timing breakdown
+measures uploads and fence waits.
+
+The delayed-GPU test exercises production buffers in both modes, with both
+upload methods, persistent/nonpersistent paths, three/four-frame lifetimes,
+exact GPU contents and unchanged allocated capacity. A whole-object hazard
+model produces 59 implicit upload waits for a shared ring and none for isolated
+stores over its 60-frame workload. This models the dependency, not the Quest
+GL driver's measured behavior. Real GLES tests rotate isolated index stores
+through production readers and draw submission, and the production SpaceWarp
+pass reads current/previous animated vertices through isolated stores across
+repeated wraps while preserving signed stereo motion/depth.
+
+### Shadow workload reduction
+
+`Batch static shadow draws` (`r_questShadowBatching`, default on) merges
+compatible opaque static caster meshes into cached index buffers. It preserves
+the original vertex buffer, shader, model matrix, triangle set, cube-face culling
+and independent global/local caster regions. A group needs four meshes with an
+identical model matrix and vertex buffer. One ordinary `glDrawElements` replaces
+the group's separate submissions. Animated vertices, alpha-tested meshes and
+unavailable index snapshots keep their original draws.
+
+Immutable index data is captured in an owned CPU snapshot during the existing
+static GPU upload, bounded at 32 MiB and enabled only in VR with batching on.
+Per-frame clipped indices use the already submitted CPU staging-ring region,
+with frame-number, alignment, bounds and region checks. Write-only persistent
+mappings are never read. There is no GPU readback or access to mutable frontend
+geometry. Unavailable data simply uses the normal shadow draw.
+
+Two matching observations precede building a group. Geometry, index allocation,
+model matrix, source buffer, membership and storage revisions invalidate it
+immediately; moving geometry renders through the original path while warming.
+Merged GPU indices are limited to 32 MiB, uploads to 2 MiB per frame, with stale
+entries retired. All assembly/uploads happen before the single shadow-atlas
+render pass. Unchanged final shadow faces still need no rendering. No additional
+depth atlas, scene copy or resolution change is introduced. The existing panel
+reports actual source submissions versus merged submissions, warm cache hits
+and uploaded KiB; these counts concern shadow draws, not all scene draws.
+
+`Skip blocked direct-light calculations` (`r_questShadowEarlyReject`, default on)
+evaluates the existing shadow visibility before direction normalization,
+half-vector/Fresnel/specular work. Zero-visibility direct lights return the
+same zero RGB and alpha as before. Ambient lighting is unchanged. Parallax
+materials retain their original tracing control flow; the gameplay lightgem
+keeps this optimization disabled. Positions, depth and shadow lookups retain
+full precision. The diagnostics count eligible scene draws using the linked
+shader uniform, not an estimated number of fragments skipped. Shader patch
+version 15 installs the updated shader through the normal Android extractor.
+
+`mobile_shadow_batch_test.py` compiles the production index-ring buffer,
+vertex-cache readers/binding and batch draw method against real GLES. It compares
+every sampled depth bit against separate draws across cube faces, cutout
+fallbacks, transforms, high vertex bases, live index-ring rotation and changed
+triangle subsets, storage resets, disable/re-enable and directional projection.
+Its procedural warm workload submits 576 original draws versus 12 with merging;
+that is a fixture count, not a claimed Briarwood draw count. ABBA timings include
+production batch preparation and GPU completion. The blocked-light GLES test
+compares complete images for all 1/2/4/8-light capacities with hard/soft shadow
+edges, blocked/lit/partial patterns, and benchmarks the same shader with the
+option off/on. Software-driver timings establish workload behavior; Quest game
+FPS remains a hardware measurement.
+
 ### Complete OpenXR frame timing
 
 The old `CPU` value was wall time inside the stereo submission function, ending

@@ -66,6 +66,9 @@ public final class Q3EPreference
     public static final String pref_vr_framebuffer_optimizations  = "q3e_vr_framebuffer_optimizations";
     public static final String pref_vr_mixed_precision            = "q3e_vr_mixed_precision";
     public static final String pref_vr_frame_memory               = "q3e_vr_frame_memory";
+    public static final String pref_vr_shadow_early_reject        = "q3e_vr_shadow_early_reject";
+    public static final String pref_vr_buffer_streaming          = "q3e_vr_buffer_streaming";
+    public static final String pref_vr_shadow_batching            = "q3e_vr_shadow_batching";
     public static final String pref_vr_spacewarp                  = "q3e_vr_spacewarp";
     public static final String pref_vr_hud_height                 = "q3e_vr_hud_height"; // cm
     public static final String pref_vr_hud_distance               = "q3e_vr_hud_distance"; // cm

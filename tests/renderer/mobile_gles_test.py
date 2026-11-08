@@ -329,6 +329,57 @@ class MobileShaderTests(unittest.TestCase):
             self.assertLessEqual(max(abs(a-b) for a,b in zip(batch,reference)),4)
             g.call('glDisable',0x0BE2)
 
+    def test_blocked_light_rejection_matches_full_brdf(self):
+        import statistics
+        import time
+        g=self.gl; original=self.forward
+        try:
+            for capacity in (1,2,4,8):
+                fragment='stages/mobile/forward.frag.glsl' if capacity==8 else f'stages/mobile/forward_{capacity}.frag.glsl'
+                p=g.program(source('stages/mobile/forward.vert.glsl'),source(fragment))
+                self.forward=p
+                self.setup_forward(ambient=False,light_count=capacity,draw=False)
+                for i in range(capacity):
+                    g.uniform(p,f'u_shadowParams[{i}]',[1.,0.,1.,1.])
+                    g.uniform(p,f'u_shadowPage[{i}]',[0.,0.,1.,1./16])
+                    g.uniform(p,f'u_shadowProjection[{i}]',[.25,0.,0.,0.,0.,.25,0.,0.,0.,0.,.1,0.,0.,0.,0.,1.],'m')
+                    g.uniform(p,f'u_diffuseColor[{i}]',[.04,.03,.02,1.])
+                    g.uniform(p,f'u_specularColor[{i}]',[.01,.02,.03,1.])
+                atlas=g.texture(14,depth=True,size=16)
+                for parallel in (0,1):
+                    for i in range(capacity):
+                        g.uniform(p,f'u_shadowParams[{i}]',[1.,0.,float(parallel),1.])
+                        g.uniform(p,f'u_shadowPage[{i}]',[0.,0.,1. if parallel else .25,1./256])
+                    for pattern in ('blocked','lit','half','checker'):
+                        values=[0xffffffff if pattern=='lit' or pattern=='half' and x>=8 or pattern=='checker' and (x//2+y//2)%2 else 0 for y in range(16) for x in range(16)]
+                        depth=(C.c_uint*256)(*values)
+                        g.call('glTexSubImage2D',0x0DE1,0,0,0,16,16,0x1902,0x1405,depth)
+                        for filtering in (0,1):
+                            g.uniform(p,'u_shadowFilter',filtering,'i')
+                            images=[]
+                            for enabled in (0,1):
+                                g.uniform(p,'u_earlyShadowReject',enabled,'i');g.call('glDrawArrays',4,0,6)
+                                images.append(g.pixels(16,16))
+                            self.assertEqual(images[0],images[1],(capacity,pattern,filtering))
+                            if pattern=='blocked':self.assertEqual(max(images[1][0::4]),0)
+                            if pattern=='lit':self.assertGreater(max(images[1][0::4]),0)
+                if capacity==8:
+                    # Same shaders, geometry, shadows and resolution. Include
+                    # completion in both windows; this is software GLES timing.
+                    g.target(256,256);g.call('glViewport',0,0,256,256)
+                    g.texture(0,(128,128,255,255))
+                    g.call('glActiveTexture',0x84CE);g.call('glBindTexture',0x0DE1,atlas)
+                    depth=(C.c_uint*256)(*([0]*256));g.call('glTexSubImage2D',0x0DE1,0,0,0,16,16,0x1902,0x1405,depth)
+                    timings={0:[],1:[]}
+                    for enabled in (0,1,1,0,0,1,1,0):
+                        g.uniform(p,'u_earlyShadowReject',enabled,'i');g.call('glFinish')
+                        start=time.perf_counter()
+                        for frame in range(12):g.call('glDrawArrays',4,0,6)
+                        g.call('glFinish');timings[enabled].append((time.perf_counter()-start)*1000/12)
+                    print('Blocked-light ABBA median (Mesa, 8 lights, 256x256): full BRDF %.3f ms, early rejection %.3f ms' % (statistics.median(timings[0]),statistics.median(timings[1])))
+                self.assertEqual(g.error(),0)
+        finally:self.forward=original
+
     def test_retained_global_and_local_shadow_depth_matches_fresh_frames(self):
         # Compile the shipping face cache policy and drive the actual shadow
         # shaders through cold/warm frames, moving/removing casters, alpha

@@ -11,6 +11,9 @@
     <string name="vr_renderer_diagnostics_label" translatable="false">Show renderer diagnostics overlay</string>
     <string name="vr_framebuffer_optimizations_label" translatable="false">Optimized framebuffer copies</string>
     <string name="vr_mixed_precision_label" translatable="false">Mixed-precision lighting (off = full precision)</string>
+    <string name="vr_shadow_early_reject_label" translatable="false">Skip blocked direct-light calculations</string>
+    <string name="vr_buffer_streaming_label" translatable="false">Separate streaming GPU buffers (restart game to apply)</string>
+    <string name="vr_shadow_batching_label" translatable="false">Batch static shadow draws</string>
     <string name="vr_frame_memory_label" translatable="false">Scene memory optimization</string>
     <string name="vr_spacewarp_label" translatable="false">Application SpaceWarp (half-rate rendering; restart game to apply)</string>
     <string name="vr_hud_height_label" translatable="false">HUD / menu screen size</string>

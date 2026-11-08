@@ -388,7 +388,7 @@ public final class Q3EGameConstants
     }
 
     // extra internal game file version: <Game engine version>.<idTech4A++ patch version>
-    public static final String TDM_GLSL_SHADER_VERSION        = GAME_VERSION_TDM + ".14"; // 14: Application SpaceWarp motion-vector shaders
+    public static final String TDM_GLSL_SHADER_VERSION        = GAME_VERSION_TDM + ".15"; // 15: shadow visibility rejection before direct-light BRDF work
     //public static final String TDM_2_12_GLSL_SHADER_VERSION   = "2.12.6"; // 6: fix a integer to float convert
     public static final String RBDOOM3BFG_HLSL_SHADER_VERSION = GAME_VERSION_DOOM3BFG + ".1"; // 1: init
     public static final String ZDOOM_VERSION                  = GAME_VERSION_ZDOOM + ".1"; // 1: init
