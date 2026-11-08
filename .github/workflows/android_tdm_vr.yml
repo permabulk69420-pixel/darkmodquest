@@ -48,6 +48,34 @@ jobs:
     - name: Accept Android SDK licenses
       run: yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
+    - name: Verify SpaceWarp on software GLES
+      env:
+        LIBGL_ALWAYS_SOFTWARE: "1"
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends libegl1 libegl-mesa0 libgles2 libgles-dev libgl1-mesa-dri
+        # Use the same pinned OpenXR AAR as the APK without waiting for Gradle.
+        python3 - <<'PY'
+        import hashlib, os, pathlib, urllib.request, zipfile, io
+        url = 'https://repo.maven.apache.org/maven2/org/khronos/openxr/openxr_loader_for_android/1.0.34/openxr_loader_for_android-1.0.34.aar'
+        data = urllib.request.urlopen(url, timeout=60).read()
+        assert hashlib.sha256(data).hexdigest() == 'c8b50603ad3b81756c6bd203ab9c9d19341326e14f6cbae87ee894137ee5e256'
+        target = pathlib.Path(os.environ['RUNNER_TEMP']) / 'quest-openxr-headers'
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            for name in archive.namelist():
+                prefix = 'prefab/modules/headers/include/'
+                if name.startswith(prefix) and not name.endswith('/'):
+                    relative = pathlib.Path(name[len(prefix):])
+                    assert '..' not in relative.parts
+                    file = target / relative
+                    file.parent.mkdir(parents=True, exist_ok=True)
+                    file.write_bytes(archive.read(name))
+        with open(os.environ['GITHUB_ENV'], 'a') as env:
+            env.write('TDM_OPENXR_HEADERS=' + str(target) + '\n')
+        PY
+        export TDM_OPENXR_HEADERS="$RUNNER_TEMP/quest-openxr-headers"
+        python3 tests/renderer/spacewarp_gles_test.py
+
     - name: Build APK (TDM only, arm64-v8a)
       run: |
         python3 bin/pack_tdm_shaders.py --check
@@ -71,9 +99,6 @@ jobs:
         OFF="$OFF,-DGAME_FTEQW=OFF,-DGAME_URT=OFF,-DGAME_OPENMOHAA=OFF,-DGAME_WOLF3D=OFF,-DGAME_SKINDEEP=OFF"
         OFF="$OFF,-DGAME_QC=OFF,-DGAME_ICARUS=OFF,-DGAME_SERIOUSSAM=OFF,-DGAME_XASH3D=OFF,-DGAME_SOURCE=OFF"
         ./gradlew assembleRelease -Pabifilters=arm64-v8a "-Pcmake_options=$OFF" --no-daemon --stacktrace
-        # Exercise the shipping SpaceWarp shader, motion/history code and
-        # xrEndFrame builder using Mesa plus the APK's actual OpenXR headers.
-        LIBGL_ALWAYS_SOFTWARE=1 python3 tests/renderer/spacewarp_gles_test.py
         df -h /
 
     - name: Collect APK
