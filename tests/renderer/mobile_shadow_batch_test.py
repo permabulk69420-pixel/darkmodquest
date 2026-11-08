@@ -117,7 +117,7 @@ struct Fixture{
   for(int i=0;i<MeshCount;++i){
    memcpy(staging+i*32,indexes,sizeof(indexes));auto &s=surfs[i];s.space=&entity;s.cutout=i%PerFace==PerFace-1;
    s.ambientCache=vertCacheHandle_t::Create(4*60,(Prefix+4*i)*60,0,true);
-   s.indexCache=vertCacheHandle_t::Create(24,MeshCount*32+i*32,1,false);
+   s.indexCache=vertCacheHandle_t::Create(24,uintptr_t(vertexCache.dynamicData.indexBuffer.BufferOffset(staging+i*32)),1,false);
   }
   vertexCache.SnapshotStaticIndexes(reinterpret_cast<const glIndex_t *>(staging),MeshCount*32,true);
   auto staticHandle=vertCacheHandle_t::Create(24,0,0,true);
@@ -153,7 +153,7 @@ struct Fixture{
  }
  void rotateIndexes(bool clipped){
   auto &buffer=vertexCache.dynamicData.indexBuffer;auto *staging=buffer.CurrentWriteLocation();
-  unsigned offset=unsigned(staging-indexStagingBase);
+  unsigned offset=unsigned(uintptr_t(buffer.BufferOffset(staging)));
   const uint32_t indexes[]={0,1,2,0,2,3},half[]={0,1,2,0,1,2};
   for(int i=0;i<MeshCount;++i){memcpy(staging+i*32,clipped?half:indexes,24);
    surfs[i].indexCache=vertCacheHandle_t::Create(24,offset+i*32,vertexCache.currentFrame,false);}

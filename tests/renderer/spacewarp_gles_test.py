@@ -205,7 +205,7 @@ struct WarpFixture{
   auto &buffer=vertexCache.streaming;auto *destination=buffer.CurrentWriteLocation();
   std::array<idDrawVert,4>data;
   for(int n=0;n<4;++n){data[n]=vertices[n];data[n].xyz.v[0]=((n==1||n==2)?10:-10)+x;data[n].xyz.v[2]=z;}
-  memcpy(destination,data.data(),sizeof(data));surf.ambientCache.offset=destination-streamingBase;++surf.ambientCache.frameNumber;
+  memcpy(destination,data.data(),sizeof(data));surf.ambientCache.offset=uintptr_t(buffer.BufferOffset(destination));++surf.ambientCache.frameNumber;
   buffer.Commit(sizeof(data));buffer.SwitchFrame();
  }
  void position(int ring,float x,float z){for(int n=0;n<4;++n){vertices[ring*4+n].xyz.v[0]=((n==1||n==2)?10:-10)+x;vertices[ring*4+n].xyz.v[2]=z;}glBindBuffer(GL_ARRAY_BUFFER,vertexCache.vertices);glBufferSubData(GL_ARRAY_BUFFER,ring*4*sizeof(idDrawVert),4*sizeof(idDrawVert),&vertices[ring*4]);surf.ambientCache.offset=ring*4*sizeof(idDrawVert);++surf.ambientCache.frameNumber;}

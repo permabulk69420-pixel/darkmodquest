@@ -69,6 +69,7 @@ bool exercise(bool retained,bool previousReads,bool persistent,int updateMode,bo
   // The simulated GPU may still be processing any commands beyond 'completed'.
   // Writing a region before its LAST consumer completes is a real race.
   if(lastRead[write]>completed){safe=false;break;}
+  assert(reinterpret_cast<uintptr_t>(buffer.BufferOffset(buffer.CurrentWriteLocation()))==unsigned(write*128));
   memset(buffer.CurrentWriteLocation(),frame,128);buffer.Commit(128);
   const auto &gpu=buffers.at(buffer.GetAPIObjectForOffset(write*128));
   for(int i=0;i<128;++i)assert(gpu[buffer.PhysicalOffset(write*128)+i]==byte(frame));

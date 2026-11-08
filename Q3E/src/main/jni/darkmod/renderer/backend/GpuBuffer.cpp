@@ -148,7 +148,10 @@ void GpuBuffer::Bind() {
 const void * GpuBuffer::BufferOffset( const void *pointer ) {
 	ptrdiff_t mapOffset = static_cast< const byte* >( pointer ) - bufferContents;
 	assert( (size_t)mapOffset < (size_t)totalSize );
-	return reinterpret_cast< const void* >( size_t(PhysicalOffset(GLuint(mapOffset))) );
+	// Frontend cache handles must retain the logical ring offset: it selects
+	// the frame's GL object as well as the address inside it. Only GPU binding
+	// operations may translate that handle to a store-local PhysicalOffset.
+	return reinterpret_cast< const void* >( mapOffset );
 }
 
 void GpuBuffer::SwitchFrame() {

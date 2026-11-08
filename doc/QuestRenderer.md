@@ -573,6 +573,24 @@ through production readers and draw submission, and the production SpaceWarp
 pass reads current/previous animated vertices through isolated stores across
 repeated wraps while preserving signed stereo motion/depth.
 
+The allocator-facing `GpuBuffer::BufferOffset` must return the **logical**
+ring address. `idVertexCache::ActuallyAlloc` embeds that address in handles so
+later code can select both a frame object and an offset inside it. Returning a
+physical/local address at allocation time loses the frame selector and corrupts
+UI/dynamic meshes. Only GPU binding operations may apply `PhysicalOffset`.
+
+`vertex_cache_streaming_test.py` compiles production `ActuallyAlloc`, buffer
+uploads, vertex/index binding and indexed drawing around a small engine shell.
+It renders static geometry, moving geometry and GUI-like quads and compares
+against independent GL uploads on a real GLES driver, allowing one RGBA8 rounding
+unit. Twelve frames exercise shared/isolated buffers, three/four vertex stores,
+nonzero intra-frame offsets, both upload methods and frame-store wraps. With the
+incorrect allocator conversion, the isolated path selects offset zero and fails
+on its first frame (865 wrong pixels in the captured workload); restoring logical
+addresses passes. The earlier lifetime/render tests manufactured logical handles
+and therefore missed this allocation contract. Their inputs now also use the
+allocator-facing buffer-offset method.
+
 ### Shadow workload reduction
 
 `Batch static shadow draws` (`r_questShadowBatching`, default on) merges

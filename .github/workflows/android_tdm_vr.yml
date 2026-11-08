@@ -6,8 +6,8 @@
 #     (so ordinary pushes do not spend CI minutes)
 #   - manual "Run workflow" (needs this file to exist on the default branch)
 #
-# Simple phone download: Releases -> Quest 3 - Streaming and Shadow Update.
-# APK filename: TDM-Quest3-Streaming-and-Shadows.apk (also inside the Actions artifact).
+# Simple phone download: Releases -> Quest 3 - Streaming Rendering Fix.
+# APK filename: TDM-Quest3-Streaming-Rendering-Fix.apk (also inside the Actions artifact).
 
 name: Android APK - TDM only (arm64)
 
@@ -74,6 +74,7 @@ jobs:
             env.write('TDM_OPENXR_HEADERS=' + str(target) + '\n')
         PY
         export TDM_OPENXR_HEADERS="$RUNNER_TEMP/quest-openxr-headers"
+        python3 tests/renderer/vertex_cache_streaming_test.py
         python3 tests/renderer/frame_timing_test.py
         python3 tests/renderer/spacewarp_gles_test.py
         python3 tests/renderer/mobile_shadow_batch_test.py
@@ -107,13 +108,13 @@ jobs:
     - name: Collect APK
       run: |
         mkdir -p out
-        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest3-Streaming-and-Shadows.apk"
+        cp idTech4Amm/build/outputs/apk/release/idTech4Amm-release.apk "out/TDM-Quest3-Streaming-Rendering-Fix.apk"
         ls -la out
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Quest3-Streaming-and-Shadows-APK
+        name: Quest3-Streaming-Rendering-Fix-APK
         path: out/*.apk
         if-no-files-found: error
         retention-days: 30
@@ -123,12 +124,12 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        tag=quest-streaming-and-shadows
-        apk=out/TDM-Quest3-Streaming-and-Shadows.apk
-        notes="Separates in-flight dynamic geometry into distinct GPU buffer objects on Quest's nonpersistent path, removing the shared-object upload/read dependency that can serialize CPU uploads with GPU rendering. Keeps the same total buffer capacity, existing reuse fences and four-frame SpaceWarp vertex history. Ordinary draws and SpaceWarp resolve frame-local buffer objects and offsets, including previous animated vertices. Also merges compatible static opaque shadow meshes into cached indexed draws and rejects fully shadowed non-parallax direct-light BRDF calculations. Original geometry, shadow resolution, single depth atlas, gameplay and eye resolution are preserved. No GPU readback or added depth copies. Separate launcher switches control streaming buffers, shadow batching and blocked-light rejection. Existing diagnostics show actual buffer mode, shadow submission reductions and eligible lighting draws. Shader patch 15 installs automatically. Android ARM64 build, production delayed-GPU lifetime/dependency tests, real GLES index-ring/depth comparisons and isolated-buffer SpaceWarp motion/depth checks, lighting image comparisons across all light capacities, launcher and stereo checks passed. The dependency model and software-driver ABBA timings verify mechanisms and workload behavior, not a measured Quest FPS improvement. All previous multiview, SpaceWarp, foveation and frame-timing changes are included. Source commit: ${GITHUB_SHA} (branch ${GITHUB_REF_NAME})."
+        tag=quest-streaming-rendering-fix
+        apk=out/TDM-Quest3-Streaming-Rendering-Fix.apk
+        notes="Fixes the stretched UI text and corrupted dynamic meshes introduced by separate streaming buffers. GpuBuffer::BufferOffset incorrectly converted frontend allocator offsets into store-local addresses, discarding the frame selector; draws then selected the wrong frame buffer. Restores logical ring addresses in allocator-produced handles and keeps local-address conversion exclusively at GPU binding. The prior checks manually constructed handles and missed this producer path. A new real-GLES regression compiles production ActuallyAlloc, frame uploads, vertex/index binding and draw submission, then compares moving geometry and GUI-like quads against independent GL uploads across shared/isolated buffers, three/four-store histories, both upload paths and repeated wraps. The released source reproduces the failure; the correction passes. SpaceWarp and shadow checks now consume allocator-facing offsets as well. Android ARM64, producer-to-draw GLES, SpaceWarp, buffer lifetimes, shader installation and launcher/stereo checks passed. Keeps streaming isolation, static-shadow merging, blocked-light rejection, resolution and all existing VR functionality. Source commit: ${GITHUB_SHA} (branch ${GITHUB_REF_NAME})."
         if gh release view "$tag" >/dev/null 2>&1; then
           gh release upload "$tag" "$apk" --clobber
-          gh release edit "$tag" --title "Quest 3 - Streaming and Shadow Update" --notes "$notes" --latest
+          gh release edit "$tag" --title "Quest 3 - Streaming Rendering Fix" --notes "$notes" --latest
         else
-          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 - Streaming and Shadow Update" --notes "$notes" --latest
+          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "Quest 3 - Streaming Rendering Fix" --notes "$notes" --latest
         fi
