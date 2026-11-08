@@ -21,6 +21,7 @@
 #include "renderer/backend/FrameBuffer.h"
 #include "renderer/backend/FrameBufferManager.h"
 #include "renderer/vr/OpenXRSwapchain.h"
+#include "renderer/QuestFrameTiming.h"
 
 namespace {
 
@@ -129,6 +130,7 @@ void XrGlSwapchain::Destroy() {
 }
 
 bool XrGlSwapchain::Acquire() {
+	QuestFrameTiming::Scope timing(QuestTiming(), QuestFrameTiming::Acquire);
 	if ( swapchain == XR_NULL_HANDLE ) {
 		return false;
 	}
@@ -161,6 +163,7 @@ void XrGlSwapchain::Release() {
 	if ( !acquired ) {
 		return;
 	}
+	QuestFrameTiming::Scope timing(QuestTiming(), QuestFrameTiming::Release);
 	// some runtimes complain about stale GL errors when releasing the image
 	qglGetError();
 	XR_Check( xrReleaseSwapchainImage( swapchain, nullptr ), "releasing swapchain image", XR_NULL_HANDLE );

@@ -19,6 +19,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 
 #include "renderer/tr_local.h"
 #include "renderer/backend/VertexArrayState.h"
+#include "renderer/QuestFrameTiming.h"
 #ifdef TDM_VR_OPENXR
 #include "renderer/vr/OpenXRSpaceWarp.h"
 #endif
@@ -51,10 +52,16 @@ static void ClearGeoBufferSet( geoBufferSet_t &gbs ) {
 
 static void SwitchFrameGeoBufferSet( geoBufferSet_t &gbs ) {
 	int commitVertexBytes = Min( gbs.vertexMemUsed.GetValue(), (int)gbs.vertexBuffer.BytesRemaining() );
-	gbs.vertexBuffer.Commit( commitVertexBytes );
+	{
+		QuestFrameTiming::Scope timing(QuestTiming(), QuestFrameTiming::Upload);
+		gbs.vertexBuffer.Commit( commitVertexBytes );
+	}
 	gbs.vertexBuffer.SwitchFrame();
 	int commitIndexBytes = Min( gbs.indexMemUsed.GetValue(), (int)gbs.indexBuffer.BytesRemaining() );
-	gbs.indexBuffer.Commit( commitIndexBytes );
+	{
+		QuestFrameTiming::Scope timing(QuestTiming(), QuestFrameTiming::Upload);
+		gbs.indexBuffer.Commit( commitIndexBytes );
+	}
 	gbs.indexBuffer.SwitchFrame();
 	ClearGeoBufferSet( gbs );
 }

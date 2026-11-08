@@ -14,6 +14,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 ******************************************************************************/
 
 #include "precompiled.h"
+#include "renderer/QuestFrameTiming.h"
 #pragma hdrstop
 
 #include "renderer/backend/RenderBackend.h"
@@ -209,6 +210,7 @@ void RenderBackend::DrawLightgem( const viewDef_t *viewDef, byte *lightgemData )
 
 	{
 		TRACE_GL_SCOPE( "CopyToPbo" );
+		QuestFrameTiming::Scope timing(QuestTiming(), QuestFrameTiming::LightgemReadback);
 		// asynchronously copy contents of the lightgem framebuffer to a pixel buffer
 		qglBindBuffer( GL_PIXEL_PACK_BUFFER, lightgemPbos[currentLightgemPbo] );
 		qglPixelStorei( GL_PACK_ALIGNMENT, 1 );	// otherwise small rows get padded to 32 bits
@@ -221,6 +223,7 @@ void RenderBackend::DrawLightgem( const viewDef_t *viewDef, byte *lightgemData )
 
 	{
 		TRACE_GL_SCOPE( "ReadFromPbo" );
+		QuestFrameTiming::Scope timing(QuestTiming(), QuestFrameTiming::LightgemReadback);
 		// advance PBO index and actually copy the data stored in that PBO to local memory
 		// this PBO is from a previous frame, and data transfer should thus be reasonably fast
 		currentLightgemPbo = ( currentLightgemPbo + 1 ) % 3;

@@ -538,6 +538,56 @@ and peripheral lights visible to only one eye. The CPU check independently
 samples 10,000 transformed boxes to ensure visible points are never clipped.
 They do not emulate the headset compositor or measure Quest frame times.
 
+### Complete OpenXR frame timing
+
+The old `CPU` value was wall time inside the stereo submission function, ending
+before swapchain release and `xrEndFrame`. It excluded game/frontend work,
+frontend joins and the end-of-frame vertex uploads/fence waits. Its independent
+two-second GPU average could contain results from older frames. Adding these
+numbers never produced a meaningful total frame time.
+
+`QuestFrameTiming` now measures cycles between completed OpenXR submissions.
+The first partial cycle is ignored; session restart, pause and profiler toggles
+reset the measurements. The existing performance HUD reports application
+rendered FPS (not synthesized/display FPS), mean complete-cycle wall time,
+actual main-thread CPU execution (`CLOCK_THREAD_CPUTIME_ID`) and a GL elapsed
+span. CPU execution excludes worker threads. CPU and GPU overlap, and a
+`GL_TIME_ELAPSED_EXT` span can include idle gaps while the CPU submits commands;
+it is not a pure GPU-busy measurement or a value to add to CPU time.
+
+The existing diagnostics show the report's cycle IDs, sample count and p95.
+Exclusive wall-time buckets cover engine/other, rendering, XR begin/locate,
+`xrWaitFrame`, all eye/UI/SpaceWarp image acquisitions, image releases,
+`xrEndFrame`, frontend completion waits, vertex/index uploads, buffer fences and
+lightgem readback. Nested waits are subtracted from the containing phase. Their
+means sum to the complete-cycle wall mean. The producer game/scene snapshots
+and render-stage wall samples are labelled separately because they overlap and
+are not the report's accounting buckets. No simulation or lightgem cadence is
+changed.
+
+An eight-slot nonblocking query pool retains the originating cycle ID for each
+GL measurement. The paired line reports coverage and the CPU/wall means for
+those same cycles. Pool exhaustion skips measurement without waiting. A clock
+disjoint invalidates all outstanding and unreported GPU results. Missing or
+invalid values show `n/a`, rather than zero.
+
+If available, `XR_META_performance_metrics` supplies the runtime's own app and
+compositor CPU/GPU frame times, compositor dropped-frame count and raw
+SpaceWarp mode. Only enumerated paths, valid value flags and matching units are
+accepted. Meta defines these counters' measurement intervals, independently of
+the engine report. The mode is not interpreted as a generated-frame count.
+Counters are polled at most once per second while the existing performance or
+diagnostics setting is visible; rendering behavior never depends on them.
+
+`python3 tests/renderer/frame_timing_test.py` compiles the production accounting,
+query pool/report and Meta client against deterministic clock/GL/XR fixtures.
+Set `TDM_OPENXR_HEADERS` to the APK loader's include directory. Checks include
+an 81 ms cycle with 24 ms CPU execution and a delayed 36 ms GL span, nested
+exclusive phases, frame-ID pairing, stale/ring-overflow results, query pool
+exhaustion, clock disjoint, pause/reset, partial warmup, p95 and disabled hooks,
+plus counter availability, flags, units, failures and polling limits. These
+checks establish accounting/protocol correctness, not Quest performance.
+
 The install check requires a JDK and compiles the production Java ZIP extraction
 and file-copy method bodies, with only Android asset access and logging stubbed.
 It verifies a fresh installation, an upgrade with the old shader directory

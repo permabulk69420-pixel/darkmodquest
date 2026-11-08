@@ -69,7 +69,7 @@ idCVar vr_srgbSwapchain( "vr_srgbSwapchain", "0", CVAR_RENDERER | CVAR_INTEGER,
 	"1 = give the headset an sRGB image format and store the engine's (already display-encoded) colours in it unchanged, 0 = plain RGBA8 format (default). "
 	"Try 0 and 1 if the colours look washed out or too dark (takes effect on restart, not saved: set it on the command line)", 0, 1 );
 idCVar vr_showPerf( "vr_showPerf", "0", CVAR_RENDERER | CVAR_BOOL,
-	"Show the frame rate and the CPU and GPU time per frame on the HUD screen (not saved: set it in the launcher)" );
+	"Show application FPS, complete frame interval, main-thread CPU execution and asynchronous GL elapsed span (not saved: set it in the launcher)" );
 idCVar vr_displayRefreshRate( "vr_displayRefreshRate", "0", CVAR_RENDERER | CVAR_INTEGER,
 	"Display refresh rate to request from the headset, e.g. 72, 80, 90 or 120 on Quest. 0 = don't ask, keep the headset's setting (takes effect on restart, not saved: set it on the command line)" );
 idCVar vr_uiOverlayHeight( "vr_uiOverlayHeight", "1.8", CVAR_RENDERER | CVAR_FLOAT | CVAR_ARCHIVE,
@@ -140,165 +140,8 @@ idQuat XR_Quat( const XrQuaternionf &q ) {
 }
 
 
-/*
-Frame timing, logged every couple of seconds: how fast frames are really delivered, how long the CPU needs to
-submit a frame and how long the GPU needs to draw it (GL_EXT_disjoint_timer_query, results arrive a few frames late).
-*/
-#ifndef GL_GPU_DISJOINT_EXT
-#define GL_GPU_DISJOINT_EXT 0x8FBB
-#endif
-
-class FrameTimer {
-public:
-	void Init() {
-		glGenQueriesEXT = ( void ( * )( GLsizei, GLuint * ) )eglGetProcAddress( "glGenQueriesEXT" );
-		glDeleteQueriesEXT = ( void ( * )( GLsizei, const GLuint * ) )eglGetProcAddress( "glDeleteQueriesEXT" );
-		glBeginQueryEXT = ( void ( * )( GLenum, GLuint ) )eglGetProcAddress( "glBeginQueryEXT" );
-		glEndQueryEXT = ( void ( * )( GLenum ) )eglGetProcAddress( "glEndQueryEXT" );
-		glGetQueryObjectuivEXT = ( void ( * )( GLuint, GLenum, GLuint * ) )eglGetProcAddress( "glGetQueryObjectuivEXT" );
-		glGetQueryObjectui64vEXT = ( void ( * )( GLuint, GLenum, uint64_t * ) )eglGetProcAddress( "glGetQueryObjectui64vEXT" );
-		gpuOk = glGenQueriesEXT && glDeleteQueriesEXT && glBeginQueryEXT && glEndQueryEXT && glGetQueryObjectuivEXT && glGetQueryObjectui64vEXT;
-		if ( gpuOk ) {
-			glGenQueriesEXT( NUM_QUERIES, queries );
-		}
-		XR_Log( "frame timing: GPU timer queries %s", gpuOk ? "available" : "not available (CPU and frame rate only)" );
-	}
-	void Shutdown() {
-		if ( gpuOk ) {
-			glDeleteQueriesEXT( NUM_QUERIES, queries );
-		}
-		gpuOk = false;
-		current = -1;
-		for ( bool &p : pending ) {
-			p = false;
-		}
-	}
-	// called when xrWaitFrame returned; waitMs is how long it blocked
-	void OnFrameStart( double waitMs ) {
-		lastWaitMs = waitMs;
-		const Clock::time_point now = Clock::now();
-		if ( haveLastFrame ) {
-			const double interval = Ms( now - lastFrame );
-			sumInterval += interval;
-			maxInterval = interval > maxInterval ? interval : maxInterval;
-			++frames;
-		} else {
-			lastReport = now;
-		}
-		haveLastFrame = true;
-		lastFrame = now;
-		sumWait += waitMs;
-	}
-	void BeginGpu() {
-		if ( !gpuOk ) {
-			return;
-		}
-		PollGpu();
-		const int slot = nextQuery;
-		if ( pending[slot] ) {
-			return;	// the GPU is too far behind to take another measurement
-		}
-		glBeginQueryEXT( GL_TIME_ELAPSED_EXT, queries[slot] );
-		current = slot;
-		nextQuery = ( slot + 1 ) % NUM_QUERIES;
-	}
-	void EndGpu() {
-		if ( current >= 0 ) {
-			glEndQueryEXT( GL_TIME_ELAPSED_EXT );
-			pending[current] = true;
-			current = -1;
-		}
-	}
-	// the latest report, for the on-screen display
-	bool GetText( char *buffer, int size ) const {
-		std::lock_guard<std::mutex> lock( textMutex );
-		if ( !text[0] ) {
-			return false;
-		}
-		idStr::Copynz( buffer, text, size );
-		return true;
-	}
-	double WaitMs() const { return lastWaitMs; } // render thread only
-	// called after the frame was submitted; cpuMs is the time spent in the stereo rendering code
-	void OnFrameEnd( double cpuMs, int eyeW, int eyeH ) {
-		sumCpu += cpuMs;
-		maxCpu = cpuMs > maxCpu ? cpuMs : maxCpu;
-
-		const Clock::time_point now = Clock::now();
-		if ( Ms( now - lastReport ) < 2000.0 || frames == 0 ) {
-			return;
-		}
-		char gpu[64] = "gpu n/a";
-		if ( gpuSamples > 0 ) {
-			snprintf( gpu, sizeof( gpu ), "gpu %.1f (max %.1f)", sumGpu / gpuSamples, maxGpu );
-		}
-		{
-			std::lock_guard<std::mutex> lock( textMutex );
-			if ( gpuSamples > 0 ) {
-				snprintf( text, sizeof( text ), "%.0f fps  frame %.1f ms  CPU %.1f (max %.1f)  GPU %.1f (max %.1f)",
-					1000.0 * frames / sumInterval, sumInterval / frames, sumCpu / frames, maxCpu, sumGpu / gpuSamples, maxGpu );
-			} else {
-				snprintf( text, sizeof( text ), "%.0f fps  frame %.1f ms  CPU %.1f (max %.1f)  GPU n/a",
-					1000.0 * frames / sumInterval, sumInterval / frames, sumCpu / frames, maxCpu );
-			}
-		}
-		XR_Log( "perf: %.1f fps, frame %.1f ms (max %.1f) | idle in xrWaitFrame %.1f | stereo render cpu %.1f (max %.1f) | %s | eye %dx%d",
-			1000.0 * frames / sumInterval, sumInterval / frames, maxInterval, sumWait / frames, sumCpu / frames, maxCpu, gpu, eyeW, eyeH );
-		frames = gpuSamples = 0;
-		sumInterval = maxInterval = sumWait = sumCpu = maxCpu = sumGpu = maxGpu = 0.0;
-		lastReport = now;
-	}
-
-private:
-	typedef std::chrono::steady_clock Clock;
-	static double Ms( Clock::duration d ) {
-		return std::chrono::duration<double, std::milli>( d ).count();
-	}
-	void PollGpu() {
-		for ( int i = 0; i < NUM_QUERIES; ++i ) {
-			if ( !pending[i] ) {
-				continue;
-			}
-			GLuint available = 0;
-			glGetQueryObjectuivEXT( queries[i], GL_QUERY_RESULT_AVAILABLE, &available );
-			if ( !available ) {
-				continue;
-			}
-			uint64_t ns = 0;
-			glGetQueryObjectui64vEXT( queries[i], GL_QUERY_RESULT, &ns );
-			pending[i] = false;
-			GLint disjoint = 0;
-			qglGetIntegerv( GL_GPU_DISJOINT_EXT, &disjoint );
-			if ( !disjoint ) {
-				const double ms = (double)ns / 1.0e6;
-				sumGpu += ms;
-				maxGpu = ms > maxGpu ? ms : maxGpu;
-				++gpuSamples;
-			}
-		}
-	}
-
-	static const int NUM_QUERIES = 4;
-	void ( *glGenQueriesEXT )( GLsizei, GLuint * ) = nullptr;
-	void ( *glDeleteQueriesEXT )( GLsizei, const GLuint * ) = nullptr;
-	void ( *glBeginQueryEXT )( GLenum, GLuint ) = nullptr;
-	void ( *glEndQueryEXT )( GLenum ) = nullptr;
-	void ( *glGetQueryObjectuivEXT )( GLuint, GLenum, GLuint * ) = nullptr;
-	void ( *glGetQueryObjectui64vEXT )( GLuint, GLenum, uint64_t * ) = nullptr;
-	bool gpuOk = false;
-	GLuint queries[NUM_QUERIES] = {};
-	bool pending[NUM_QUERIES] = {};
-	int current = -1;
-	int nextQuery = 0;
-
-	mutable std::mutex textMutex;
-	char text[160] = "";
-	bool haveLastFrame = false;
-	Clock::time_point lastFrame, lastReport;
-	int frames = 0, gpuSamples = 0;
-	double sumInterval = 0, maxInterval = 0, sumWait = 0, sumCpu = 0, maxCpu = 0, sumGpu = 0, maxGpu = 0;
-	double lastWaitMs = 0;
-};
+#include "renderer/vr/OpenXRFrameTimer.h"
+#include "renderer/vr/OpenXRPerfMetrics.h"
 
 /*
 =============================================================================================
@@ -348,9 +191,11 @@ struct OpenXRBackend::Impl {
 	bool recenterPending = false;		// the headset's centre was reset: the menu screen is put in front of the player again
 	XrTime recenterTime = 0;
 
-	FrameTimer timer;
+	OpenXRFrameTimer timer;
+	OpenXRPerfMetrics perfMetrics;
+	bool hasPerfMetrics = false;
 	mutable std::mutex diagnosticsMutex;
-	char diagnosticsText[4096] = {};
+	char diagnosticsText[8192] = {};
 	unsigned diagnosticsFrame = 0;
 	void UpdateDiagnostics( const frameData_t *fd );
 	std::vector<const emptyCommand_t *> reusedCameraCommands;
@@ -468,6 +313,8 @@ bool OpenXRBackend::Impl::CreateInstance() {
 	if ( hasSpaceWarp && vr_spaceWarp.GetBool() ) {
 		enabled.push_back( XR_FB_SPACE_WARP_EXTENSION_NAME );
 	}
+	hasPerfMetrics = hasExtension(XR_META_PERFORMANCE_METRICS_EXTENSION_NAME);
+	if (hasPerfMetrics) enabled.push_back(XR_META_PERFORMANCE_METRICS_EXTENSION_NAME);
 	hasPerfSettings = hasExtension( XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME );
 	if ( hasPerfSettings ) {
 		enabled.push_back( XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME );
@@ -658,6 +505,7 @@ bool OpenXRBackend::Impl::Initialize() {
 	}
 	input.Init( instance, session );
 	timer.Init();
+	perfMetrics.Init(instance, session, hasPerfMetrics);
 
 	// The GUI is drawn at 640x480 virtual pixels and has no aspect ratio fixup: it fills the whole overlay, which is 4:3.
 	// Scissors computed by the frontend are valid for the combined view only and are of no use for the individual eyes.
@@ -670,6 +518,7 @@ bool OpenXRBackend::Impl::Initialize() {
 }
 
 void OpenXRBackend::Impl::Shutdown() {
+	perfMetrics.Shutdown();
 	spaceWarp.Shutdown();
 	multiview.Shutdown();
 	timer.Shutdown();
@@ -705,6 +554,7 @@ Session
 =============================================================================================
 */
 void OpenXRBackend::Impl::OnSessionBegun() {
+	timer.Reset();
 	spaceWarp.ResetHistory();
 	warpResetTime = 0;
 	if ( vr_displayRefreshRate.GetInteger() > 0 && hasRefreshRate && pfnRequestRefreshRate && pfnEnumerateRefreshRates ) {
@@ -752,6 +602,8 @@ void OpenXRBackend::Impl::OnSessionStateChanged( const XrEventDataSessionStateCh
 		break;
 	}
 	case XR_SESSION_STATE_STOPPING:
+		timer.Enable(false);
+		perfMetrics.Poll(false, double(QuestFrameTiming::WallClock()) / 1e9);
 		spaceWarp.ResetHistory();
 		sessionRunning = false;
 		haveRenderViews = havePredictedViews = false;
@@ -864,11 +716,11 @@ bool OpenXRBackend::Impl::BeginFrame() {
 
 	XrFrameWaitInfo waitInfo = { XR_TYPE_FRAME_WAIT_INFO };
 	XrFrameState frameState = { XR_TYPE_FRAME_STATE };
-	const std::chrono::steady_clock::time_point waitStart = std::chrono::steady_clock::now();
-	if ( !XR_Check( xrWaitFrame( session, &waitInfo, &frameState ), "waiting for the next frame", instance ) ) {
-		return false;
+	{
+		QuestFrameTiming::Scope wait(QuestTiming(), QuestFrameTiming::XrWait);
+		if (!XR_Check(xrWaitFrame(session, &waitInfo, &frameState), "waiting for the next frame", instance)) return false;
 	}
-	timer.OnFrameStart( std::chrono::duration<double, std::milli>( std::chrono::steady_clock::now() - waitStart ).count() );
+	QuestFrameTiming::Scope begin(QuestTiming(), QuestFrameTiming::XrBegin);
 	predictedDisplayTime = frameState.predictedDisplayTime;
 	displayPeriod = frameState.predictedDisplayPeriod > 0 ? frameState.predictedDisplayPeriod : 13888889;	// fall back to 72 Hz
 	shouldRender = frameState.shouldRender != XR_FALSE;
@@ -890,6 +742,7 @@ void OpenXRBackend::Impl::EndFrame( bool submitLayers, bool hasWorldView ) {
 		return;
 	}
 	frameBegun = false;
+	QuestFrameTiming::Scope end(QuestTiming(), QuestFrameTiming::XrEnd);
 
 	XrCompositionLayerProjectionView projectionViews[2] = {
 		{ XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW },
@@ -1344,99 +1197,106 @@ void OpenXRBackend::Impl::RenderSpaceWarp( const frameData_t *fd ) {
 }
 
 void OpenXRBackend::Impl::RenderFrame( const frameData_t *fd ) {
-	spaceWarp.BeginFrame();
-	if ( !BeginFrame() ) {
-		return;
-	}
-
-	const std::chrono::steady_clock::time_point cpuStart = std::chrono::steady_clock::now();
+	const bool measure = sessionRunning && (vr_showPerf.GetBool() || vr_rendererDiagnostics.GetBool());
+	timer.Enable(measure);
 	bool rendered = false;
-	const bool hasWorldView = FrameHasWorldView( fd ) && !fd->render2D;
-	reusedCameraCommands.clear();
-	for ( const emptyCommand_t *cmd = fd->cmdHead; cmd; cmd = NextCommand(cmd) ) {
-		if ( cmd->commandId != RC_DRAW_VIEW ) continue;
-		const auto *view = ((const drawSurfsCommand_t *)cmd)->viewDef;
-		const emptyCommand_t *copy = NextCommand(cmd);
-		const copyRenderCommand_t *capture = copy && copy->commandId == RC_COPY_RENDER ? (const copyRenderCommand_t *)copy : nullptr;
-		bool uniqueImageCopy = capture && capture->image && !capture->buffer && !capture->usePBO;
-		if ( uniqueImageCopy ) {
-			for ( const emptyCommand_t *other = fd->cmdHead; other; other = NextCommand(other) ) {
-				if ( other == copy || other->commandId != RC_COPY_RENDER ) continue;
-				if ( ((const copyRenderCommand_t *)other)->image == capture->image ) { uniqueImageCopy = false;break; }
+	{
+		QuestFrameTiming::Scope render(QuestTiming(), QuestFrameTiming::Render);
+		spaceWarp.BeginFrame();
+		if (!BeginFrame()) {
+			timer.Enable(false);
+			perfMetrics.Poll(false, double(QuestFrameTiming::WallClock()) / 1e9);
+			return;
+		}
+		const bool hasWorldView = FrameHasWorldView( fd ) && !fd->render2D;
+		reusedCameraCommands.clear();
+		for ( const emptyCommand_t *cmd = fd->cmdHead; cmd; cmd = NextCommand(cmd) ) {
+			if ( cmd->commandId != RC_DRAW_VIEW ) continue;
+			const auto *view = ((const drawSurfsCommand_t *)cmd)->viewDef;
+			const emptyCommand_t *copy = NextCommand(cmd);
+			const copyRenderCommand_t *capture = copy && copy->commandId == RC_COPY_RENDER ? (const copyRenderCommand_t *)copy : nullptr;
+			bool uniqueImageCopy = capture && capture->image && !capture->buffer && !capture->usePBO;
+			if ( uniqueImageCopy ) {
+				for ( const emptyCommand_t *other = fd->cmdHead; other; other = NextCommand(other) ) {
+					if ( other == copy || other->commandId != RC_COPY_RENDER ) continue;
+					if ( ((const copyRenderCommand_t *)other)->image == capture->image ) { uniqueImageCopy = false;break; }
+				}
+			}
+			if ( MobileRenderPlan::ReuseCapturedView(IsWorldView(view),view->isSubview,view->isMirrorGen,view->isPortalSky,
+				view->renderView.followsHead,view->renderView.viewID == VID_PLAYER_VIEW,uniqueImageCopy,fd->render2D) ) {
+				reusedCameraCommands.push_back(cmd);reusedCameraCommands.push_back(copy);
 			}
 		}
-		if ( MobileRenderPlan::ReuseCapturedView(IsWorldView(view),view->isSubview,view->isMirrorGen,view->isPortalSky,
-			view->renderView.followsHead,view->renderView.viewID == VID_PLAYER_VIEW,uniqueImageCopy,fd->render2D) ) {
-			reusedCameraCommands.push_back(cmd);reusedCameraCommands.push_back(copy);
-		}
-	}
 
-	if ( shouldRender && haveRenderViews &&
-		 eyeSwapchains[0].Acquire() && eyeSwapchains[1].Acquire() && uiSwapchain.Acquire() ) {
-		FrameBuffer *realDefault = frameBuffers->defaultFbo;
+		if ( shouldRender && haveRenderViews &&
+			 eyeSwapchains[0].Acquire() && eyeSwapchains[1].Acquire() && uiSwapchain.Acquire() ) {
+			FrameBuffer *realDefault = frameBuffers->defaultFbo;
 
-		try {
-			timer.BeginGpu();
-			questRenderCounters = {};
-			// The frontend has already culled a combined stereo view. Shadow
-			// depth and material/light packets are independent of the late eye
-			// pose: build once, before either eye starts its tile render pass.
-			renderBackend->PrepareStereoFrame( fd->cmdHead );
-			if(hasWorldView&&R_UseMobileLighting()&&r_multiSamples.GetInteger()<=1&&
-				renderBackend->PrepareMultiview()&&multiview.BeginFrame(fd->cmdHead)){
-				reusedCameraCommands.clear();
-				ExecuteMultiview(fd);
-			} else {
-				ExecutePass( fd, PASS_LEFT, eyeSwapchains[0].CurrentFrameBuffer() );
-				ExecutePass( fd, PASS_RIGHT, eyeSwapchains[1].CurrentFrameBuffer() );
+			try {
+				timer.BeginGpu();
+				questRenderCounters = {};
+				// The frontend has already culled a combined stereo view. Shadow
+				// depth and material/light packets are independent of the late eye
+				// pose: build once, before either eye starts its tile render pass.
+				renderBackend->PrepareStereoFrame( fd->cmdHead );
+				if(hasWorldView&&R_UseMobileLighting()&&r_multiSamples.GetInteger()<=1&&
+					renderBackend->PrepareMultiview()&&multiview.BeginFrame(fd->cmdHead)){
+					reusedCameraCommands.clear();
+					ExecuteMultiview(fd);
+				} else {
+					ExecutePass( fd, PASS_LEFT, eyeSwapchains[0].CurrentFrameBuffer() );
+					ExecutePass( fd, PASS_RIGHT, eyeSwapchains[1].CurrentFrameBuffer() );
+				}
+				RenderSpaceWarp(fd);
+				ExecutePass( fd, PASS_UI, uiSwapchain.CurrentFrameBuffer() );
+				if ( vr_rendererDiagnostics.GetBool() ) UpdateDiagnostics(fd);
+				renderBackend->FinishStereoFrame();
+				timer.EndGpu();
+			} catch ( ... ) {
+				multiview.EndFrame();
+				renderBackend->FinishStereoFrame();
+				timer.EndGpu();
+				// the engine reports errors with exceptions: leave everything in a state that lets the next frame start cleanly
+				frameBuffers->defaultFbo = realDefault;
+				frameBuffers->currentRenderFbo = realDefault;
+				eyeSwapchains[0].Release();
+				eyeSwapchains[1].Release();
+				uiSwapchain.Release();
+				EndFrame( false, false );
+				timer.Enable(false);
+				throw;
 			}
-			RenderSpaceWarp(fd);
-			ExecutePass( fd, PASS_UI, uiSwapchain.CurrentFrameBuffer() );
-			if ( vr_rendererDiagnostics.GetBool() ) UpdateDiagnostics(fd);
-			renderBackend->FinishStereoFrame();
-			timer.EndGpu();
-		} catch ( ... ) {
-			multiview.EndFrame();
-			renderBackend->FinishStereoFrame();
-			timer.EndGpu();
-			// the engine reports errors with exceptions: leave everything in a state that lets the next frame start cleanly
+
 			frameBuffers->defaultFbo = realDefault;
 			frameBuffers->currentRenderFbo = realDefault;
-			eyeSwapchains[0].Release();
-			eyeSwapchains[1].Release();
-			uiSwapchain.Release();
-			EndFrame( false, false );
-			throw;
+			realDefault->Bind();
+
+			qglFlush();
+			rendered = true;
+
+			// heartbeat: roughly every 10 seconds, to see in the log that the headset is tracked and the frames keep flowing
+			static int frameCounter = 0;
+			if ( ++frameCounter % 720 == 0 ) {
+				const XrPosef &p = renderViews[0].pose;
+				XR_Log( "frame %d, head at %.2f %.2f %.2f m, session state %d", frameCounter, p.position.x, p.position.y, p.position.z, (int)sessionState );
+			}
+
+			static bool loggedFirstFrame = false;
+			if ( !loggedFirstFrame ) {
+				loggedFirstFrame = true;
+				XR_Log( "first stereo frame submitted (%dx%d per eye, fov left %.0f/%.0f/%.0f/%.0f deg)", eyeWidth, eyeHeight,
+					RAD2DEG( renderViews[0].fov.angleLeft ), RAD2DEG( renderViews[0].fov.angleRight ),
+					RAD2DEG( renderViews[0].fov.angleUp ), RAD2DEG( renderViews[0].fov.angleDown ) );
+			}
 		}
 
-		frameBuffers->defaultFbo = realDefault;
-		frameBuffers->currentRenderFbo = realDefault;
-		realDefault->Bind();
-
-		qglFlush();
-		rendered = true;
-		timer.OnFrameEnd( std::chrono::duration<double, std::milli>( std::chrono::steady_clock::now() - cpuStart ).count(), eyeWidth, eyeHeight );
-
-		// heartbeat: roughly every 10 seconds, to see in the log that the headset is tracked and the frames keep flowing
-		static int frameCounter = 0;
-		if ( ++frameCounter % 720 == 0 ) {
-			const XrPosef &p = renderViews[0].pose;
-			XR_Log( "frame %d, head at %.2f %.2f %.2f m, session state %d", frameCounter, p.position.x, p.position.y, p.position.z, (int)sessionState );
-		}
-
-		static bool loggedFirstFrame = false;
-		if ( !loggedFirstFrame ) {
-			loggedFirstFrame = true;
-			XR_Log( "first stereo frame submitted (%dx%d per eye, fov left %.0f/%.0f/%.0f/%.0f deg)", eyeWidth, eyeHeight,
-				RAD2DEG( renderViews[0].fov.angleLeft ), RAD2DEG( renderViews[0].fov.angleRight ),
-				RAD2DEG( renderViews[0].fov.angleUp ), RAD2DEG( renderViews[0].fov.angleDown ) );
-		}
-	}
-
-	eyeSwapchains[0].Release();
-	eyeSwapchains[1].Release();
-	uiSwapchain.Release();
-	EndFrame( rendered, hasWorldView );
+		eyeSwapchains[0].Release();
+		eyeSwapchains[1].Release();
+		uiSwapchain.Release();
+		EndFrame( rendered, hasWorldView );
+	} // close every exclusive phase before the complete-cycle boundary
+	perfMetrics.Poll(measure, double(QuestFrameTiming::WallClock()) / 1e9);
+	timer.Complete(rendered);
 }
 
 bool OpenXRBackend::GetPerfText( char *buffer, int size ) const {
@@ -1447,7 +1307,10 @@ bool OpenXRBackend::GetPerfText( char *buffer, int size ) const {
 }
 
 void OpenXRBackend::Impl::UpdateDiagnostics( const frameData_t *fd ) {
-	char mobile[1400], timing[160] = "Timing: collecting frame/GPU samples";
+	char mobile[1400], timing[160] = "Timing: collecting complete-cycle samples";
+	char breakdown[1100] = {}, meta[320] = {};
+	timer.GetDetails(breakdown, sizeof(breakdown));
+	perfMetrics.GetText(meta, sizeof(meta));
 	renderBackend->MobileLighting().GetDiagnosticsText(mobile, sizeof(mobile));
 	timer.GetText(timing, sizeof(timing));
 	int linked, failed, unused;
@@ -1473,13 +1336,13 @@ void OpenXRBackend::Impl::UpdateDiagnostics( const frameData_t *fd ) {
 	char foveation[200];
 	renderBackend->MobileLighting().GetFoveationDiagnostics(foveation,sizeof(foveation));
 	char warp[320];spaceWarp.GetDiagnostics(warp,sizeof(warp),hasSpaceWarp);
-	char text[4096];
+	char text[8192];
 	snprintf(text, sizeof(text),
-		"RENDERER DIAGNOSTICS | last completed frame %u\n"
-		"OpenXR ACTIVE | stereo 2 eyes | %dx%d | %.1f Hz\n"
-		"%s\n%s%s"
-		"CPU ms: game %d | frontend %d | XR wait %.1f | SMP %s\n"
-		"Render CPU ms: prep %.1f | depth %.1f | light %.1f\n"
+		"RENDERER DIAGNOSTICS | render sample %u\n"
+		"OpenXR | 2 eyes %dx%d | display %.1f Hz | XR period %.1f ms\n"
+		"%s\n%s%s%s%s"
+		"Producer snapshot ms: game %d | scene %d | SMP %s\n"
+		"Render wall ms (sample): prep %.1f | depth %.1f | light %.1f\n"
 		"Frame allocation: %s | reserved %d KiB\n"
 		"Framebuffer copies: %s | depth %d | direct tone %d | discarded %d\n"
 		"Lighting precision: %s | positions/shadows/lightgem FULL\n"
@@ -1494,9 +1357,9 @@ void OpenXRBackend::Impl::UpdateDiagnostics( const frameData_t *fd ) {
 		"%s"
 		"Shadows setting: %s | soft filter: %s\n"
 		"MSAA samples: %d (requested %d) | HDR buffer: %d-bit\n",
-		++diagnosticsFrame, eyeWidth, eyeHeight, displayRefreshHz>0?displayRefreshHz:displayPeriod>0?1e9/double(displayPeriod):0.0,
-		timing, mobile, warp,
-		fd->questGameMsec, fd->questFrontendMsec, timer.WaitMs(), com_smp.GetBool() ? "ON" : "OFF",
+		++diagnosticsFrame, eyeWidth, eyeHeight, displayRefreshHz>0?displayRefreshHz:displayPeriod>0?1e9/double(displayPeriod):0.0, double(displayPeriod)/1e6,
+		timing, breakdown, meta, mobile, warp,
+		fd->questGameMsec, fd->questFrontendMsec, com_smp.GetBool() ? "ON" : "OFF",
 		c.prepareCpuMs, c.depthCpuMs, c.lightingCpuMs,
 		cvarSystem->GetCVarBool("r_frameAllocChunks")?"PER-WORKER 16 KiB":"SHARED per request",
 		fd->frameMemoryAllocated.load(std::memory_order_relaxed)/1024,

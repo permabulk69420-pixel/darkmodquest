@@ -19,6 +19,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 #include "Session_local.h"
 #include "Common.h"
 #include "renderer/tr_local.h"
+#include "renderer/QuestFrameTiming.h"
 #include "renderer/backend/FrameBuffer.h"
 #include "game/gamesys/SysCvar.h"
 #include "game/Missions/MissionManager.h"
@@ -3172,6 +3173,7 @@ Waits for the frontend to finish preparing the next frame.
 */
 void idSessionLocal::WaitForFrontendCompletion() {
 	if( com_smp.GetBool() ) {
+		QuestFrameTiming::Scope timing(QuestTiming(), QuestFrameTiming::FrontendWait);
 		TRACE_CPU_SCOPE_COLOR( "WaitForFrontend", TRACE_COLOR_IDLE );
 		std::unique_lock<std::mutex> lock( signalMutex );
 		if( r_showSmp.GetBool() )

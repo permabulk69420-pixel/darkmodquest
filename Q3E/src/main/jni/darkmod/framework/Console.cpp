@@ -1267,11 +1267,12 @@ void idConsoleLocal::Draw( bool forceFullScreen ) {
 		y = SCR_DrawSoundDecoders( y );
 	}
 
-	char diagnostics[4096];
+	char diagnostics[8192];
 	if ( vrBackend->GetRendererDiagnosticsText(diagnostics, sizeof(diagnostics)) ) {
 		int lines = 1;
 		for ( const char *p = diagnostics; *p; ++p ) if ( *p == '\n' && p[1] ) ++lines;
-		const int top = 24, spacing = SMALLCHAR_HEIGHT + 2;
+		const int top = 24;
+		const int spacing = idMath::Imin(SMALLCHAR_HEIGHT + 2, (SCREEN_HEIGHT - top - 12) / lines);
 		renderSystem->SetColor(idVec4(0, 0, 0, 0.85f));
 		renderSystem->DrawStretchPic(8, top, SCREEN_WIDTH-16, lines*spacing+12, 0, 0, 1, 1, declManager->FindMaterial("_white"));
 		int lineY = top + 6;

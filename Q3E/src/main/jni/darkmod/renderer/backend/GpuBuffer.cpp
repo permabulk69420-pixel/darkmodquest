@@ -14,6 +14,7 @@ Project: The Dark Mod (http://www.thedarkmod.com/)
 ******************************************************************************/
 #include "precompiled.h"
 #include "renderer/backend/GpuBuffer.h"
+#include "renderer/QuestFrameTiming.h"
 
 extern idCVarBool r_usePersistentMapping;
 idCVar r_gpuBufferNonpersistentUpdateMode(
@@ -149,6 +150,7 @@ void GpuBuffer::SwitchFrame() {
 	bytesCommittedInCurrentFrame = 0;
 
 	if ( frameFences[currentWritingFrame] != nullptr ) {
+		QuestFrameTiming::Scope timing(QuestTiming(), QuestFrameTiming::FenceWait);
 		// await lock for next frame region to ensure that data is not used by the GPU anymore
 		GLenum result = qglClientWaitSync( frameFences[currentWritingFrame], 0, 0 );
 		while( result != GL_ALREADY_SIGNALED && result != GL_CONDITION_SATISFIED ) {
